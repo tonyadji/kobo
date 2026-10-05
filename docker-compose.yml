@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: kobo
+      POSTGRES_PASSWORD: kobo
+      POSTGRES_DB: kobo
+    ports:
+      - "5432:5432"
+    shm_size: 1g
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c shared_buffers=1GB
+      -c work_mem=32MB
+      -c maintenance_work_mem=512MB
+      -c max_wal_size=4GB
+      -c log_lock_waits=on
+      -c deadlock_timeout=1s
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db:/docker-entrypoint-initdb.d:ro
+      - ./bench:/bench:ro
+
+volumes:
+  pgdata:

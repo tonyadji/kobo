@@ -1,0 +1,11 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# macOS
+.DS_Store
+
+# Java (lab/)
+target/
+*.class
