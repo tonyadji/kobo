@@ -54,7 +54,11 @@ SELECT relname,
 FROM pg_catalog.pg_statio_user_tables
 ORDER BY pg_total_relation_size(relid) DESC;
 ```
-
+```sql
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'table_name';
+```
 ### Observations
 
 - Une transaction pèse ~85 octets dans la table, dont ~24 octets d'en-tête de ligne (avec `xmin`/`xmax`) : c'est le coût du MVCC.
