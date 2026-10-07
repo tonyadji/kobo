@@ -96,8 +96,8 @@ Les tables liées au nombre d'utilisateurs tiennent en ~20 GB : 65 M d'utilisate
 - Index : `db/03-index.sql`
 
   ```sql
-  CREATE INDEX idx_from_account  ON transactions (from_account_id, created_at);
-  CREATE INDEX idx_to_account    ON transactions (to_account_id,   created_at);
+  CREATE INDEX idx_tx_from_created  ON transactions (from_account_id, created_at);
+  CREATE INDEX idx_tx_to_created    ON transactions (to_account_id,   created_at);
   CREATE INDEX idx_accounts_user ON accounts (user_id);
   ```
 
@@ -159,3 +159,108 @@ Les temps côté client de pgAdmin (« Query complete », de 0,06 à 0,93 s) ont
 ### Conclusion pour la question 1
 
 Avant de faire grossir quoi que ce soit, chercher les requêtes qui lisent beaucoup plus qu'elles ne renvoient (`pg_stat_statements`, puis `EXPLAIN (ANALYZE, BUFFERS)`). Sur 5 M de transactions, l'historique d'un compte sans index lisait toute la table (400 Mo) pour renvoyer 50 lignes ; un index composite `(account_id, created_at)` et une réécriture en `UNION ALL` le ramènent à 57 pages et 2 ms. Les clés étrangères non indexées sont l'autre gain rapide. À 65 M d'utilisateurs, c'est la différence entre lire des pages et lire la table, et le `OR` disparaît avec un grand livre en double entrée (une ligne par compte et par mouvement, un seul index).
+
+
+---
+
+## Mercredi 7 — Index partiels et couvrants, coût en écriture
+
+### Méthode
+
+- Index finaux sur `transactions` (`db/03-index.sql`) :
+
+  ```sql
+  CREATE INDEX idx_tx_from_cover ON transactions (from_account_id, created_at DESC)
+      INCLUDE (amount_minor, status);
+  CREATE INDEX idx_tx_to_created ON transactions (to_account_id, created_at);
+  CREATE INDEX idx_tx_pending    ON transactions (created_at) WHERE status = 'PENDING';
+  ```
+
+  L'index couvrant remplace `idx_tx_from_created` de mardi.
+- `EXPLAIN (ANALYZE, BUFFERS)`, cache chaud. Les temps sont l'`Execution Time` côté serveur.
+- Débit en écriture : `pgbench -n -c 8 -j 4 -T 30 -f /bench/insert_tx.sql` (`INSERT` d'une ligne dans `transactions`, comptes aléatoires), `CHECKPOINT` avant chaque série, 2 exécutions par configuration.
+- Le seed met ~1,5 % des transactions en `PENDING` (~75 000 lignes).
+
+### Requêtes
+
+**D. Job de relance : transactions en attente depuis plus d'une heure**
+
+```sql
+SELECT id, from_account_id, amount_minor
+FROM transactions
+WHERE status = 'PENDING' AND created_at < now() - interval '1 hour'
+ORDER BY created_at
+LIMIT 100;
+```
+
+**E. Historique d'un compte, avec seulement les colonnes d'un écran de liste**
+
+```sql
+SELECT created_at, amount_minor, status
+FROM transactions
+WHERE from_account_id = 42
+ORDER BY created_at DESC
+LIMIT 50;
+```
+
+### Résultats
+
+Les plans complets sont en annexe de la version anglaise (`s1.md`).
+
+**Index partiel (requête D)**
+
+| # | Index | Nœuds principaux | Temps d'exécution | Buffers |
+| --- | --- | --- | ---: | ---: |
+| 9 | aucun | Parallel Seq Scan + tri top-N | 998,8 ms | 51 621 |
+| 10 | `idx_tx_pending` (partiel) | Index Scan | 0,30 ms | 102 |
+
+**~3 300× plus rapide, ~500× moins de pages.** Pour la ligne 10, un index complet sur `created_at` existait aussi : le planificateur a choisi le partiel.
+
+| Index sur `created_at` | Taille |
+| --- | ---: |
+| Complet (5 M de lignes) | 107 Mo |
+| Partiel (`WHERE status = 'PENDING'`) | 1,6 Mo (**65× plus petit**) |
+
+**Index couvrant (requête E, compte chaud 42, après `VACUUM ANALYZE`)**
+
+| # | Index | Nœuds principaux | Heap fetches | Temps d'exécution | Buffers |
+| --- | --- | --- | ---: | ---: | ---: |
+| 11 | `(from_account_id, created_at)` | Index Scan | — | 0,25 ms | 53 |
+| 12 | couvrant, juste après `VACUUM FULL` | Index Only Scan | 50 | 0,39 ms | 56 |
+| 13 | couvrant, après `VACUUM` | Index Only Scan | 0 | 0,39 ms | 22 |
+
+**2,4× moins de pages, même temps** (tout était en cache).
+
+**Coût en écriture (pgbench, insertions d'une ligne)**
+
+| Configuration | Exécution 1 | Exécution 2 | Moyenne | Latence moy. |
+| --- | ---: | ---: | ---: | ---: |
+| Clé primaire + 3 index secondaires | 17 154 tps | 18 463 tps | **17 809 tps** | 0,45 ms |
+| Clé primaire seule | 20 837 tps | 21 348 tps | **21 092 tps** | 0,38 ms |
+
+**Les 3 index secondaires coûtent ~16 % du débit d'insertion.** L'écart entre deux exécutions identiques est de ~7 % : la différence est réelle, mais ne se lit pas au pourcent près. La liste exacte des index pendant les exécutions « avec index » n'a pas été relevée.
+
+**Taille des index, état final**
+
+| Index | Taille |
+| --- | ---: |
+| `idx_tx_from_cover` | 278 Mo |
+| `idx_tx_to_created` | 150 Mo |
+| `transactions_pkey` | 107 Mo |
+| `idx_tx_pending` | 1,6 Mo |
+| **Total** | **~537 Mo** (table : 403 Mo) |
+
+### Observations
+
+1. **Un index partiel ne stocke que les lignes qu'on interroge.** Un index sur `status` seul serait presque inutile (3 valeurs pour 5 M de lignes), mais la valeur rare est justement celle dont le job de relance a besoin. L'index partiel est 65× plus petit qu'un index complet : il coûte peu à maintenir et reste en mémoire.
+2. **Un index couvrant supprime l'accès à la table, pas du temps, tant que tout est en cache.** 53 → 22 pages, mais 0,25 ms contre 0,39 ms, soit du bruit sous la milliseconde. Chaque page économisée est une lecture aléatoire évitée quand la table ne tient plus en mémoire : le gain grandit avec les données, le coût aussi.
+3. **Un Index Only Scan a besoin d'une visibility map à jour.** Juste après `VACUUM FULL`, le plan affichait `Index Only Scan` mais faisait 50 accès à la table (un par ligne) et lisait 56 pages, plus que l'index simple. `VACUUM FULL` réécrit la table sans remplir la visibility map ; un `VACUUM` simple la remplit. Sur une table très active, le réglage de l'autovacuum influe directement sur les performances en lecture.
+4. **22 pages pour 50 entrées d'index, c'est plus que prévu** (~4 : 3 niveaux + 1 feuille). Explication probable, non vérifiée : la visibility map d'une table de 51 621 pages occupe 2 pages, les lignes du compte 42 sont réparties dans les deux moitiés de la table, et chaque passage d'une page de la carte à l'autre compte comme un `hit`.
+5. **`INCLUDE` n'est pas gratuit.** L'index couvrant fait 278 Mo contre 150 Mo pour la même clé sans colonnes incluses (+85 %). Les index pèsent désormais plus lourd que la table.
+6. **Chaque insertion paie aussi les clés étrangères.** `pg_stat_statements` a compté 14,7 M d'appels (43 s au total) à `SELECT … FROM accounts … FOR KEY SHARE` : deux vérifications de clé étrangère par transaction insérée (5 M du seed + 2,3 M de pgbench, × 2).
+7. **Un benchmark d'écriture modifie les données qu'il mesure.** Les quatre exécutions de pgbench ont inséré 2 333 965 lignes (5 M → 7,3 M). Elles ont été supprimées (`created_at >= '2026-10-06'`) et la table reconstruite avec `VACUUM FULL`, pour garder la base de 5 M lignes pour les mesures suivantes.
+8. **`pg_stat_statements` doit être filtré avant d'être lu.** Le premier top 10 contenait le seed, les `CREATE INDEX` et le benchmark ; après `pg_stat_statements_reset()`, ce sont les requêtes de catalogue de pgAdmin qui arrivaient en tête. Les vraies requêtes applicatives étaient toutes rapides : 2,33 ms pour le job de relance (D), 1,95 ms pour les transactions sortantes d'un utilisateur (C). Deux vues comptent : le temps total (requêtes fréquentes et peu coûteuses) et le temps moyen (requêtes rares et lentes).
+
+### Conclusion pour la question 1
+
+Les index sont un compromis, pas un réflexe. Un index partiel fait passer un job d'une seconde à 0,3 ms pour 1,6 Mo ; un index couvrant supprime l'accès à la table pour la lecture la plus fréquente ; mais les trois index secondaires coûtent déjà ~16 % du débit d'insertion et pèsent plus lourd que la table. Sur une table aussi sollicitée en écriture que `transactions`, à 65 M d'utilisateurs, chaque index doit correspondre à une requête mesurée, et un index couvrant ne paie que si le vacuum tient la visibility map à jour.
