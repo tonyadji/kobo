@@ -389,3 +389,73 @@ La copie des 5 M de lignes dans la table partitionnée a pris 18,7 s (temps pgAd
 ### Conclusion pour la question 1
 
 À 65 M d'utilisateurs, `transactions` grossit d'environ 66 Go par mois : la question est de vivre avec le flux, pas de stocker le stock. Le partitionnement par mois rend bon marché les deux grosses opérations liées au temps : un mois de reporting lit 24× moins de pages, et l'archivage de 18 mois passe d'un `DELETE` de 3,1 s qui laisse 1,27 M de lignes mortes à un `DETACH` de 85 ms. Le prix se paie sur les lectures par compte : un compte calme sonde toutes les partitions (158 pages au lieu de 14), plus un coût de planification qui grandit avec le nombre de partitions. La parade consiste à borner l'historique d'un compte dans le temps et à paginer par curseur sur `created_at`, pour que l'élagage s'applique : avec une fenêtre de 12 mois, le compte calme lit déjà deux fois moins de pages (81 au lieu de 158). C'est préférable à un partitionnement par hash de compte, ce qui ramènerait l'archivage à un `DELETE`.
+
+---
+
+## Vendredi 9 — La mise à jour perdue
+
+### Méthode
+
+- Table de laboratoire `lab_accounts (id, balance_minor CHECK (balance_minor >= 0), version)`, en dehors du schéma principal.
+- **À la main :** deux sessions `psql` (`docker compose exec postgres psql -U kobo kobo`), en READ COMMITTED (niveau par défaut). Le compte 1 part de 10000 ; la session A débite 1000, la session B débite 3000, chacune calculant le nouveau solde à partir d'une valeur lue plus tôt.
+- **Sous charge :** `lab/` (Maven, Java 21, seul le driver JDBC PostgreSQL). `TransferLab` remet 10 comptes à 100 000 (total 1 000 000), puis lance 16 threads de plateforme, une connexion chacun, `autoCommit = false`, libérés ensemble par un `CountDownLatch`. Chaque thread fait des virements aléatoires de 1 à 1 000 entre les 10 comptes (forte contention), en sautant `from == to`. À la fin, la somme des soldes doit être inchangée.
+- Stratégies, choisies par le premier argument du programme (`naive` / `atomic`) :
+  - `NaiveTransfer` : `SELECT` du solde, calcul en Java, `UPDATE … SET balance_minor = <valeur absolue>`, pour `from` puis `to`.
+  - `AtomicTransfer` : un seul `UPDATE … SET balance_minor = balance_minor - ? WHERE id = ? AND balance_minor >= ?` conditionnel (0 ligne modifiée = solde insuffisant), puis `balance_minor = balance_minor + ?` sur `to`. Aucune lecture préalable.
+- Réglages du serveur utiles ici : `deadlock_timeout = 1s`, `log_lock_waits = on`.
+- **500 virements par worker** (8 000 tentatives) pour un lancement naïf, puis **50 par worker** (800 tentatives, ~720 une fois les `from == to` écartés) pour la série de 5 lancements : un lancement à 500 a pris 18 minutes (voir l'observation 4).
+
+### Résultats
+
+**À la main (deux sessions `psql`)**
+
+| Variante | Ce qui se passe | Solde final (attendu : 6000) |
+| --- | --- | ---: |
+| `SELECT` simple, puis `UPDATE` avec la valeur calculée | B se bloque sur son `UPDATE` jusqu'au `COMMIT` de A, puis écrase l'écriture de A | **7000** : le débit de 1000 de A est perdu |
+| `SELECT … FOR UPDATE` dans les deux sessions | B se bloque dès son `SELECT`, puis lit 9000 | **6000** |
+| `SELECT` simple, les deux sessions en `BEGIN ISOLATION LEVEL REPEATABLE READ` | B se bloque sur son `UPDATE` jusqu'au `COMMIT` de A, puis échoue : `ERROR: could not serialize access due to concurrent update` (SQLSTATE `40001`) | **9000** après l'annulation de B : rien n'est perdu, mais le débit de B doit être rejoué |
+
+**Sous charge, 500 virements par worker**
+
+| Stratégie | Temps | Validés | Deadlocks (`40P01`) | Total après | Écart |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `NaiveTransfer` | 1 076,0 s | 5 550 | 1 647 (23 %) | 1 615 519 | **+615 519 (+62 %)** |
+
+**Sous charge, 50 virements par worker, 5 lancements chacun**
+
+| Lancement | Stratégie | Temps | Validés | Deadlocks (`40P01`) | Total après | Écart | Invariant |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | `NaiveTransfer` | 104,1 s | 577 | 160 | 1 063 769 | +63 769 | BROKEN |
+| 2 | `NaiveTransfer` | 103,1 s | 560 | 163 | 1 063 000 | +63 000 | BROKEN |
+| 3 | `NaiveTransfer` | 80,1 s | 576 | 137 | 1 081 923 | +81 923 | BROKEN |
+| 4 | `NaiveTransfer` | 98,2 s | 563 | 155 | 1 063 648 | +63 648 | BROKEN |
+| 5 | `NaiveTransfer` | 100,0 s | 535 | 173 | 1 058 650 | +58 650 | BROKEN |
+| 1 | `AtomicTransfer` | 96,0 s | 556 | 167 | 1 000 000 | 0 | OK |
+| 2 | `AtomicTransfer` | 73,8 s | 593 | 126 | 1 000 000 | 0 | OK |
+| 3 | `AtomicTransfer` | 88,0 s | 584 | 141 | 1 000 000 | 0 | OK |
+| 4 | `AtomicTransfer` | 107,0 s | 558 | 170 | 1 000 000 | 0 | OK |
+| 5 | `AtomicTransfer` | 102,9 s | 552 | 162 | 1 000 000 | 0 | OK |
+
+| | `NaiveTransfer` | `AtomicTransfer` |
+| --- | --- | --- |
+| Invariant | **cassé 5 / 5**, +5,9 % à +8,2 % du total | **respecté 5 / 5** |
+| Deadlocks | 137 à 173 par lancement (19 à 24 % des tentatives) | 126 à 170 par lancement (17 à 23 % des tentatives) |
+| Temps | 80 à 104 s | 74 à 107 s |
+| Débit | 5,4 à 7,2 virements validés/s | 5,4 à 8,0 virements validés/s |
+
+`rejected = 0` à chaque lancement : avec 100 000 par compte et des virements de 1 000 au plus, aucun compte n'a manqué de fonds.
+
+### Observations
+
+1. **Une mise à jour perdue demande une lecture périmée et une écriture absolue.** Dans `psql`, l'`UPDATE` de B a attendu le verrou de ligne de A, mais a ensuite écrit 7000, une valeur calculée à partir des 10000 lus avant le `COMMIT` de A. Le problème n'est pas l'`UPDATE` lui-même, mais la valeur calculée dans l'application.
+2. **`FOR UPDATE` déplace l'attente sur la lecture.** B s'est bloquée sur son `SELECT … FOR UPDATE` et, une fois débloquée, a lu la dernière version validée (9000), pas celle de son snapshot. Même niveau d'isolation (READ COMMITTED), aucune anomalie. REPEATABLE READ empêche la mise à jour perdue dans l'autre sens : B n'attend pas la bonne valeur, elle est annulée dès que A valide, et l'application doit rejouer. Pessimiste (attendre) contre optimiste (annuler et rejouer), déjà visible avec deux sessions.
+3. **La stratégie naïve a cassé l'invariant à chaque lancement** (6 / 6 en comptant le lancement à 500 virements), avec un écart différent à chaque fois.
+4. **De l'argent a toujours été créé, jamais détruit** (6 écarts positifs sur 6). Hypothèse, non vérifiée : chaque transaction lit `from` sans verrou, puis attend souvent sur son `UPDATE from`. La transaction qu'elle attend est le plus souvent en train de *débiter* cette ligne, parce que chaque virement verrouille `from` en premier et le garde pendant qu'il attend `to`, alors qu'un crédit verrouille sa ligne en dernier et valide juste après. Quand l'attente se termine, la transaction écrit son solde périmé et efface ce débit. Les mises à jour perdues sont donc surtout des débits perdus. Pour le vérifier, il faudrait journaliser les écritures écrasées.
+5. **L'`UPDATE` atomique a corrigé la cohérence en READ COMMITTED** (5 / 5 OK), sans verrou explicite : quand un `UPDATE … SET balance_minor = balance_minor - ?` bloqué reprend, PostgreSQL réévalue la ligne, condition `WHERE balance_minor >= ?` comprise, sur sa dernière version validée.
+6. **Il n'a changé ni les deadlocks ni le temps.** Environ 1 tentative sur 5 a fini en deadlock avec les deux stratégies. Les deux verrouillent `from` puis `to`, donc des virements croisés (A→B et B→A) forment des cycles ; celui affiché pendant le lancement à 500 virements impliquait trois processus. La cohérence et l'ordre d'acquisition des verrous sont deux problèmes distincts. Un virement en deadlock est annulé proprement (aucun argent perdu) mais n'a pas eu lieu : en production, il faut le rejouer.
+7. **La détection des deadlocks domine le temps d'exécution.** PostgreSQL ne cherche un cycle qu'après `deadlock_timeout` (1 s), et pendant ce temps les transactions en attente gardent leurs verrous et en bloquent d'autres. 1 647 deadlocks pour 1 076 s à 500 virements par worker : ~0,65 s de lancement par deadlock, ~5 virements validés par seconde.
+8. **Compter toutes les issues.** Les premiers lancements naïfs n'avaient pas de `catch (SQLException)` dans la boucle : le premier deadlock tuait le thread, et seules 586 à 1 102 des ~7 200 tentatives étaient comptées, avec `errors = {}`. Ces lancements ont été écartés. Vérifier que validés + rejetés + erreurs ≈ tentatives.
+
+### Conclusion pour la question 3
+
+Une mise à jour perdue ne s'évite pas avec le plus haut niveau d'isolation, mais en ne calculant jamais un solde à partir d'une lecture périmée. Dans Kobo, un read-modify-write naïf a cassé l'invariant de l'argent sur 5 lancements sur 5 avec 16 workers concurrents (6 à 8 % d'argent créé), et un seul `UPDATE` conditionnel en READ COMMITTED l'a corrigé sur 5 lancements sur 5, sans verrou explicite. Mais environ 1 virement sur 5 a encore fini en deadlock avec les deux stratégies : l'ordre des verrous est un problème distinct, à régler samedi en verrouillant les comptes dans un ordre fixe, et à comparer avec SERIALIZABLE et le verrouillage optimiste sous la même contention.
