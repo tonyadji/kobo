@@ -264,3 +264,128 @@ Les plans complets sont en annexe de la version anglaise (`s1.md`).
 ### Conclusion pour la question 1
 
 Les index sont un compromis, pas un réflexe. Un index partiel fait passer un job d'une seconde à 0,3 ms pour 1,6 Mo ; un index couvrant supprime l'accès à la table pour la lecture la plus fréquente ; mais les trois index secondaires coûtent déjà ~16 % du débit d'insertion et pèsent plus lourd que la table. Sur une table aussi sollicitée en écriture que `transactions`, à 65 M d'utilisateurs, chaque index doit correspondre à une requête mesurée, et un index couvrant ne paie que si le vacuum tient la visibility map à jour.
+
+---
+
+## Jeudi 8 — Partitionnement par mois
+
+### Méthode
+
+- Copie partitionnée de `transactions` (`db/04-partition.sql`) : `transactions_p`, `PARTITION BY RANGE (created_at)`, **26 partitions mensuelles** (octobre 2024 → novembre 2026), clé primaire `(id, created_at)`. Sur chaque partition, les deux mêmes index par compte que mardi (et non l'index couvrant de mercredi) :
+
+  ```sql
+  CREATE INDEX ON transactions_p (from_account_id, created_at DESC);
+  CREATE INDEX ON transactions_p (to_account_id, created_at DESC);
+  ```
+
+- Les mêmes 5 M de lignes dans les deux tables (`INSERT INTO transactions_p SELECT * FROM transactions`, puis `ANALYZE`). Données : 403 Mo dans les deux cas ; index : 505 Mo (partitionnée) contre 537 Mo (simple). Un mois complet représente ~208 000 lignes et 17 Mo.
+- `EXPLAIN (ANALYZE, BUFFERS)`, chaque requête lancée deux fois, **deuxième exécution retenue** (cache chaud) sauf mention contraire. JIT désactivé (`SET jit = off`) pour la requête par période : à une première exécution, il prenait 62 ms sur 282.
+- Référence table simple pour l'historique d'un compte : lignes 5 et 6 de mardi (même forme d'index).
+- Archivage : le `DELETE` est mesuré avec `EXPLAIN ANALYZE` et le `DETACH` avec `\timing` dans psql, tous deux dans une transaction annulée.
+
+### Requêtes
+
+**F. Volume quotidien du mois dernier** (septembre 2026)
+
+```sql
+SELECT date_trunc('day', created_at) AS day, count(*), sum(amount_minor)
+FROM transactions_p          -- ou transactions
+WHERE created_at >= date_trunc('month', now()) - interval '1 month'
+  AND created_at <  date_trunc('month', now())
+GROUP BY 1
+ORDER BY 1;
+```
+
+**G. Historique d'un compte** : requête B (`UNION ALL`) de mardi, avec les **deux** branches sur `transactions_p`.
+
+**G'. Historique limité aux 12 derniers mois** : requête G avec une borne de date dans chaque branche, pour que l'élagage s'applique.
+
+```sql
+(SELECT * FROM transactions_p
+ WHERE from_account_id = 900000 AND created_at >= now() - interval '1 year'
+ ORDER BY created_at DESC LIMIT 50)
+-- même borne dans la branche to_account_id
+```
+
+**H. Archivage de tout ce qui a plus de 18 mois**
+
+```sql
+BEGIN;
+EXPLAIN ANALYZE DELETE FROM transactions WHERE created_at < now() - interval '18 months';
+ROLLBACK;
+
+BEGIN;
+ALTER TABLE transactions_p DETACH PARTITION transactions_p_2024_10;
+-- … idem pour 2024_11, 2024_12, 2025_01, 2025_02, 2025_03
+SELECT count(*) FROM transactions_p;
+ROLLBACK;
+```
+
+### Résultats
+
+Les plans complets sont en annexe de la version anglaise (`s1.md`).
+
+**Ce que le partitionnement accélère : les requêtes sur une période (F)**
+
+| # | Table | Nœuds principaux | Planification | Temps d'exécution | Buffers |
+| --- | --- | --- | ---: | ---: | ---: |
+| 14 | `transactions` | Parallel Seq Scan (2 workers) + tri | 1,06 ms | 705,7 ms | 51 621 |
+| 15 | `transactions_p` | 1 Seq Scan (`Subplans Removed: 25`) + tri | 2,0 ms | 159,6 ms | 2 145 |
+
+**24× moins de pages, 4,4× plus rapide, avec 1 processus au lieu de 3.**
+
+**Ce que le partitionnement ralentit : les requêtes par compte (G)**
+
+| # | Table | Compte | Index de partition parcourus | Planification | Temps d'exécution | Buffers |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| 5 | `transactions` (mardi) | 42 | — | — | 1,96 ms | 57 |
+| 16 | `transactions_p` | 42 | 8 / 52 | 5,5 ms | 2,80 ms | 71 |
+| 6 | `transactions` (mardi) | 900000 | — | — | 0,17 ms | 14 |
+| 17 | `transactions_p` | 900000 | 52 / 52 | 1,87 ms | 0,71 ms | 158 |
+| 17b | `transactions_p`, à froid (`read=148`) | 900000 | 52 / 52 | 5,9 ms | 21,0 ms | 158 |
+
+Compte actif : **+25 % de pages, presque neutre**. Compte calme : **11× plus de pages**, 4× plus lent avec les pages en cache, 120× plus lent quand elles viennent du disque.
+
+**Historique borné à 12 mois (G')**
+
+| # | Requête | Compte | Index de partition parcourus | Planification | Temps d'exécution | Buffers | Lignes renvoyées |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 17 | G, sans borne | 900000 | 52 / 52 | 1,87 ms | 0,71 ms | 158 | 6 |
+| 20 | G', 12 mois | 900000 | 28 / 52 (`Subplans Removed: 12` par branche) | 3,0 ms | 0,42 ms | 81 | **1** |
+| 16 | G, sans borne | 42 | 8 / 52 | 5,5 ms | 2,80 ms | 71 | 50 |
+| 21 | G', 12 mois | 42 | 8 / 52 | 5,8 ms | 2,51 ms | 71 | 50 |
+
+Compte calme : **deux fois moins de pages, 1,7× plus rapide**. Compte actif : aucun changement.
+
+**Archivage (H)**
+
+| # | Table | Opération | Lignes archivées | Temps | Lignes mortes laissées |
+| --- | --- | --- | ---: | ---: | ---: |
+| 18 | `transactions` | `DELETE … WHERE created_at < now() - 18 mois` | 1 272 471 | 3 110,9 ms | 1 272 471 |
+| 19 | `transactions_p` | 6 × `DETACH PARTITION` | 1 221 352 | 84,7 ms | 0 |
+
+**37× plus rapide, et rien à nettoyer pour VACUUM.** Chaque `DETACH` a pris 11 à 17 ms (11,4 / 16,6 / 15,8 / 12,4 / 15,4 / 13,0 ms), pour ~200 000 lignes chacun.
+
+La copie des 5 M de lignes dans la table partitionnée a pris 18,7 s (temps pgAdmin, indicatif).
+
+### Observations
+
+1. **L'élagage a eu lieu à l'exécution.** `Subplans Removed: 25` signifie que le planificateur a gardé les 26 partitions et que l'exécuteur en a écarté 25 au démarrage : les bornes utilisent `now()`, qui n'est pas une constante au moment de la planification. Avec des dates littérales, les partitions élaguées n'apparaîtraient pas du tout dans le plan.
+2. **Les pages baissent bien plus que le temps quand tout est en cache.** 24× moins de pages, mais 4,4× plus rapide : sans lecture disque, le coût est du CPU, et le tri et l'agrégation des 208 000 lignes de septembre sont les mêmes sur les deux tables. Sur des données qui ne tiennent pas en mémoire, chaque page non lue est une lecture disque économisée. La table simple a aussi eu besoin de 3 processus, qu'un serveur chargé prendrait aux autres requêtes.
+3. **Un `Append` ordonné s'arrête dès que le `LIMIT` est atteint.** Les partitions sont parcourues de la plus récente à la plus ancienne. Pour le compte actif, la branche `from` a trouvé ses 50 lignes en octobre et septembre 2026 : seuls 3 index de partition ont été parcourus, les 23 autres sont `never executed`.
+4. **Le compte calme est le pire cas.** Il n'atteint jamais 50 lignes, donc les 26 × 2 index de partition sont tous sondés, à ~3 pages chacun : 158 pages au lieu de 14. Le partitionnement pénalise les comptes **peu** actifs, et le coût grandit avec le nombre de partitions, pas avec le volume de données.
+5. **À froid ou à chaud, on voit où est le risque.** Les mêmes 158 pages ont pris 21 ms depuis le disque et 0,71 ms depuis le cache. Le nombre de pages est la mesure stable ; à 65 M d'utilisateurs, quand les données ne tiennent plus en mémoire, il se traduit en lectures aléatoires.
+6. **`Merge Append` lit ses branches à la demande.** Pour le compte 42, la branche `to` s'est arrêtée après sa première ligne (juillet 2026) : elle était plus ancienne que les 50 lignes déjà fournies par la branche `from`.
+7. **Le partitionnement ajoute un coût fixe de planification.** Environ 2 ms par requête avec 26 partitions, contre ~1 ms sur la table simple. La première requête après le `DETACH` / `ROLLBACK` a pris 19,8 ms à planifier ; explication probable, non vérifiée : la description des partitions a dû être rechargée dans le cache. Ce coût grandit avec le nombre de partitions, une raison de ne pas partitionner par jour.
+8. **`DELETE` touche les lignes, `DETACH` touche le catalogue.** Le `DELETE` a lu toute la table (1,9 s de parcours séquentiel), puis écrit un `xmax` sur 1,27 M de lignes : après un `COMMIT`, ce seraient des lignes mortes (bloat, un `VACUUM` à payer sur la table et ses index, du WAL pour chaque ligne). Le `DETACH` transforme seulement une partition en table autonome, qu'on peut ensuite exporter vers un stockage froid puis supprimer : ~14 ms, quelle que soit la taille de la partition.
+9. **La rétention doit suivre les bornes des partitions.** La date limite était le 8 avril 2025 : le `DETACH` a archivé 51 119 lignes de moins que le `DELETE`, parce que du 1er au 8 avril 2025 se trouve dans la partition d'avril, encore en partie dans la fenêtre. En production, la rétention se définit en mois entiers.
+10. **Un `DETACH` simple prend un verrou `ACCESS EXCLUSIVE` sur la table parente** jusqu'à la fin de la transaction (d'après la documentation, non mesuré ici). En production : `DETACH PARTITION … CONCURRENTLY`, qui ne bloque ni les lectures ni les écritures, mais ne peut pas s'exécuter dans un bloc de transaction.
+11. **Vérifier que chaque nœud du plan lit la table attendue.** La première mesure de l'historique avait encore la seconde branche du `UNION ALL` sur `transactions` : le plan mélangeait les deux tables (`Index Scan Backward using idx_tx_to_created on transactions`). Elle a été écartée et refaite.
+
+12. **Une borne de date aide exactement les comptes que le partitionnement pénalise.** Sur 12 mois, 12 des 26 partitions sont élaguées dans chaque branche, et les pages du compte calme baissent en proportion des partitions conservées (28 / 52 × 158 ≈ 85 ; mesuré : 81). Le compte actif ne gagne rien : les partitions élaguées étaient déjà `never executed`. Une fenêtre plus courte (3 mois par exemple) rapprocherait le compte calme de la table simple ; non mesuré.
+13. **Une borne de date change le résultat.** Le compte 900000 renvoie 1 ligne au lieu de 6 : les 5 autres ont plus d'un an. Borner l'historique est un choix produit, pas une optimisation transparente : l'écran affiche « 12 derniers mois », et « voir plus » interroge la fenêtre précédente avec un curseur sur `created_at`.
+14. **Le temps de planification est bruité à cette échelle.** Entre 1,9 et 7,1 ms selon les exécutions d'une même requête, toutes les pages étant en cache. Des écarts de quelques millisecondes de planification ne sont pas significatifs ici sans plus d'exécutions.
+
+### Conclusion pour la question 1
+
+À 65 M d'utilisateurs, `transactions` grossit d'environ 66 Go par mois : la question est de vivre avec le flux, pas de stocker le stock. Le partitionnement par mois rend bon marché les deux grosses opérations liées au temps : un mois de reporting lit 24× moins de pages, et l'archivage de 18 mois passe d'un `DELETE` de 3,1 s qui laisse 1,27 M de lignes mortes à un `DETACH` de 85 ms. Le prix se paie sur les lectures par compte : un compte calme sonde toutes les partitions (158 pages au lieu de 14), plus un coût de planification qui grandit avec le nombre de partitions. La parade consiste à borner l'historique d'un compte dans le temps et à paginer par curseur sur `created_at`, pour que l'élagage s'applique : avec une fenêtre de 12 mois, le compte calme lit déjà deux fois moins de pages (81 au lieu de 158). C'est préférable à un partitionnement par hash de compte, ce qui ramènerait l'archivage à un `DELETE`.
