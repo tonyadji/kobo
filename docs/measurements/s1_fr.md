@@ -459,3 +459,107 @@ La copie des 5 M de lignes dans la table partitionnée a pris 18,7 s (temps pgAd
 ### Conclusion pour la question 3
 
 Une mise à jour perdue ne s'évite pas avec le plus haut niveau d'isolation, mais en ne calculant jamais un solde à partir d'une lecture périmée. Dans Kobo, un read-modify-write naïf a cassé l'invariant de l'argent sur 5 lancements sur 5 avec 16 workers concurrents (6 à 8 % d'argent créé), et un seul `UPDATE` conditionnel en READ COMMITTED l'a corrigé sur 5 lancements sur 5, sans verrou explicite. Mais environ 1 virement sur 5 a encore fini en deadlock avec les deux stratégies : l'ordre des verrous est un problème distinct, à régler samedi en verrouillant les comptes dans un ordre fixe, et à comparer avec SERIALIZABLE et le verrouillage optimiste sous la même contention.
+
+---
+
+## Samedi 10 — Stratégies de concurrence sous contention
+
+### Méthode
+
+- Même table de laboratoire `lab_accounts (id, balance_minor CHECK (balance_minor >= 0), version)`, même banc de test (`lab/`, 16 threads de plateforme, une connexion chacun, `autoCommit = false`, 50 virements de 1 à 1 000 par worker, libérés par un `CountDownLatch`).
+- `TransferLab <inutilisé> <comptes> <lancements>` exécute les cinq stratégies l'une après l'autre, `<lancements>` fois, en réinitialisant la table avant chaque stratégie. Les résultats sont ajoutés à `lab/results.txt`.
+- **Solde initial abaissé à 5 000** (100 000 vendredi), pour que le cas « fonds insuffisants » s'exécute vraiment. Deux invariants : la somme des soldes est inchangée, et aucun solde n'est négatif.
+- **Deux niveaux de contention :** 10 comptes (forte) et 1 000 comptes (faible), 3 lancements chacun.
+- **Rejeu dans le runner, pas dans les stratégies.** Le montant est tiré une fois par virement, puis jusqu'à 3 tentatives de `transfer` + `commit`. Rejouables : `VersionConflictException` (optimiste) et les SQLSTATE `40001` / `40P01`, lus avec `SQLException.getSQLState()` (le driver PostgreSQL lève toujours une `PSQLException`, jamais une sous-classe spécifique). Toute autre `SQLException` est comptée et n'est pas rejouée. Le `commit` est dans le bloc rejoué, car en SERIALIZABLE l'erreur `40001` peut être levée par le commit lui-même.
+- Compteurs par lancement : `ok` (validés), `ignored` (`from == to`), `rejected` (fonds insuffisants détectés par la stratégie), `errors` par SQLSTATE, `failed attempts` (toute tentative rejouable annulée, la dernière comprise), `finalFailures` (3 tentatives épuisées). Contrôle : `ok + ignored + rejected + finalFailures (+ erreurs non rejouables) = 800` dans chaque lancement ci-dessous.
+- Stratégies (READ COMMITTED sauf mention contraire) :
+
+| Stratégie | Principe |
+| --- | --- |
+| `AtomicTransfer` | `UPDATE … SET balance_minor = balance_minor - ? WHERE id = ? AND balance_minor >= ?` conditionnel et `balance_minor + ?`, **les deux `UPDATE` par id croissant** (crédit en premier quand `to < from` ; un débit refusé annule le crédit) |
+| `PessimisticOrderedTransfer` | `SELECT … FOR UPDATE` sur les deux comptes **par id croissant**, fonds vérifiés en Java, `UPDATE` en valeur absolue |
+| `PessimisticUnorderedTransfer` | Idem, mais `from` verrouillé en premier, puis `to` |
+| `OptimisticTransfer` | Lectures simples du solde et de `version`, puis `UPDATE … SET balance_minor = ?, version = version + 1 WHERE id = ? AND version = ?` par id croissant ; 0 ligne sur l'un des `UPDATE` = conflit, rejeu |
+| `SerializableTransfer` | Le read-modify-write naïf de vendredi, inchangé, en `TRANSACTION_SERIALIZABLE` (réglé sur la connexion avant la première requête), écritures dans l'ordre `from` → `to` |
+
+### Prédiction (écrite avant de mesurer)
+
+| Rang | Comptes chauds (10) | Comptes calmes (1 000) |
+| ---: | --- | --- |
+| 1 | Pessimiste ordonné | Optimiste |
+| 2 | SERIALIZABLE | SERIALIZABLE |
+| 3 | Optimiste | Pessimiste |
+
+Révisée juste avant les lancements à 1 000 comptes : le pessimiste ordonné reste plus rapide que l'optimiste, car ce qui favorise l'optimiste est la contention par compte, pas le nombre de comptes en soi.
+
+### Résultats
+
+**10 comptes (forte contention), 3 lancements**
+
+| Lancement | Stratégie | Temps | Validés | Ignorés | Rejetés | Erreurs | Tentatives ratées | Échecs finaux | Invariant |
+| ---: | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |
+| 1 | `AtomicTransfer` | 302 ms | 692 | 78 | 30 | — | 0 | 0 | OK |
+| 2 | `AtomicTransfer` | 211 ms | 681 | 76 | 43 | — | 0 | 0 | OK |
+| 3 | `AtomicTransfer` | 210 ms | 680 | 75 | 45 | — | 0 | 0 | OK |
+| 1 | `PessimisticOrderedTransfer` | 319 ms | 688 | 88 | 24 | — | 0 | 0 | OK |
+| 2 | `PessimisticOrderedTransfer` | 276 ms | 670 | 79 | 51 | — | 0 | 0 | OK |
+| 3 | `PessimisticOrderedTransfer` | 275 ms | 680 | 87 | 33 | — | 0 | 0 | OK |
+| 1 | `OptimisticTransfer` | 378 ms | 386 | 89 | 19 | — | 1 195 | 306 | OK |
+| 2 | `OptimisticTransfer` | 324 ms | 384 | 85 | 27 | — | 1 185 | 304 | OK |
+| 3 | `OptimisticTransfer` | 317 ms | 374 | 91 | 13 | — | 1 223 | 322 | OK |
+| 1 | `SerializableTransfer` | 53,8 s | 328 | 88 | 36 | `40001` × 1 234, `40P01` × 81 | 1 315 | 348 | OK |
+| 2 | `SerializableTransfer` | 50,9 s | 335 | 73 | 19 | `40001` × 1 308, `40P01` × 87 | 1 395 | 373 | OK |
+| 3 | `SerializableTransfer` | 45,8 s | 337 | 86 | 23 | `40001` × 1 254, `40P01` × 79 | 1 333 | 354 | OK |
+| 1 | `PessimisticUnorderedTransfer` | 131,3 s | 654 | 81 | 0 | `40P01` × 261, `23514` × 44 | 261 | 21 | OK |
+| 2 | `PessimisticUnorderedTransfer` | 150,4 s | 673 | 63 | 0 | `40P01` × 305, `23514` × 32 | 305 | 32 | OK |
+| 3 | `PessimisticUnorderedTransfer` | 170,8 s | 629 | 84 | 0 | `40P01` × 305, `23514` × 54 | 305 | 33 | OK |
+
+**1 000 comptes (faible contention), 3 lancements**
+
+| Lancement | Stratégie | Temps | Validés | Ignorés | Rejetés | Erreurs | Tentatives ratées | Échecs finaux | Invariant |
+| ---: | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |
+| 1 | `AtomicTransfer` | 243 ms | 800 | 0 | 0 | — | 0 | 0 | OK |
+| 2 | `AtomicTransfer` | 128 ms | 799 | 1 | 0 | — | 0 | 0 | OK |
+| 3 | `AtomicTransfer` | 113 ms | 799 | 1 | 0 | — | 0 | 0 | OK |
+| 1 | `PessimisticOrderedTransfer` | 200 ms | 799 | 1 | 0 | — | 0 | 0 | OK |
+| 2 | `PessimisticOrderedTransfer` | 163 ms | 799 | 1 | 0 | — | 0 | 0 | OK |
+| 3 | `PessimisticOrderedTransfer` | 165 ms | 800 | 0 | 0 | — | 0 | 0 | OK |
+| 1 | `OptimisticTransfer` | 243 ms | 798 | 1 | 0 | — | 30 | 1 | OK |
+| 2 | `OptimisticTransfer` | 194 ms | 798 | 2 | 0 | — | 50 | 0 | OK |
+| 3 | `OptimisticTransfer` | 184 ms | 800 | 0 | 0 | — | 49 | 0 | OK |
+| 1 | `SerializableTransfer` | 257 ms | 765 | 1 | 0 | `40001` × 301 | 301 | 34 | OK |
+| 2 | `SerializableTransfer` | 224 ms | 751 | 0 | 0 | `40001` × 320 | 320 | 49 | OK |
+| 3 | `SerializableTransfer` | 239 ms | 761 | 0 | 0 | `40001` × 312 | 312 | 39 | OK |
+| 1 | `PessimisticUnorderedTransfer` | 167 ms | 800 | 0 | 0 | — | 0 | 0 | OK |
+| 2 | `PessimisticUnorderedTransfer` | 178 ms | 800 | 0 | 0 | — | 0 | 0 | OK |
+| 3 | `PessimisticUnorderedTransfer` | 159 ms | 800 | 0 | 0 | — | 0 | 0 | OK |
+
+**Synthèse (temps médian, moyenne pour les autres colonnes ; échecs finaux rapportés aux virements tentés, soit 800 moins les ignorés)**
+
+| Stratégie | 10 comptes : temps | Validés | Échecs finaux | Validés/s | 1 000 comptes : temps | Tentatives ratées | Échecs finaux |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `AtomicTransfer` (ordonné) | **211 ms** | 684 | 0 | ~3 200 | **128 ms** | 0 | 0 |
+| `PessimisticOrderedTransfer` | **276 ms** | 679 | 0 | ~2 500 | 165 ms | 0 | 0 |
+| `OptimisticTransfer` | 324 ms | 381 | 311 (**44 %**) | ~1 200 | 194 ms | 43 (~5 %) | ~0 |
+| `SerializableTransfer` | 50,9 s | 333 | 358 (**50 %**) | ~6,5 | 239 ms | 311 | 41 (**~5 %**) |
+| `PessimisticUnorderedTransfer` | 150,4 s | 652 | 29 | ~4,3 | 167 ms | 0 | 0 |
+
+**Lancement préliminaire, sans rejeu** (10 comptes, solde initial 100 000, avant la réécriture du runner) : `AtomicTransfer` avec ses `UPDATE` encore dans l'ordre `from` → `to` 73,8 s, 623 validés, 113 deadlocks ; `PessimisticUnorderedTransfer` 98,9 s, 545 validés, 187 deadlocks ; `PessimisticOrderedTransfer` 329 ms, 732 validés, aucune erreur. Le résultat optimiste de ce lancement est écarté (voir l'observation 10).
+
+### Observations
+
+1. **L'ordre des verrous supprime les deadlocks, quelle que soit la stratégie.** Avec 10 comptes, le pessimiste non ordonné a fait 261 à 305 deadlocks par lancement ; l'ordonné, aucun, pas plus que l'`UPDATE` atomique une fois ses deux requêtes ordonnées par id (113 deadlocks au lancement préliminaire, 17 à 24 % des tentatives vendredi). L'atomicité règle la cohérence, l'ordre règle les deadlocks : deux problèmes distincts, confirmé.
+2. **Un deadlock coûte à tout le monde, pas seulement à ses victimes.** Médiane de 276 ms ordonné contre 150,4 s non ordonné : **~545× plus lent** pour le même travail. Chaque deadlock n'est détecté qu'après `deadlock_timeout` (1 s), et avec 10 comptes les deux transactions bloquées en tiennent 2 pendant ce temps : la plupart des autres workers font la queue derrière. Le temps varie aussi beaucoup d'un lancement à l'autre (131 à 171 s), alors que les stratégies sans deadlock restent dans un écart d'environ 100 ms.
+3. **Rejouer les deadlocks récupère les virements, pas le temps.** Non ordonné sans rejeu (lancement préliminaire) : 545 validés en 98,9 s. Avec 3 tentatives au plus : 629 à 673 validés, mais 131 à 171 s, car chaque rejeu peut refaire un deadlock (21 à 33 virements échouent encore après 3 tentatives). Le rejeu soigne le symptôme, l'ordre des verrous supprime la cause.
+4. **L'optimiste gaspille son travail sous contention.** Avec 10 comptes, il est presque aussi rapide que les stratégies ordonnées (324 ms), mais ~1 200 tentatives échouent sur un conflit de version et **44 % des virements échouent encore après 3 tentatives**. Son débit de virements validés (~1 200/s) est moins de la moitié de celui du pessimiste ordonné (~2 500/s).
+5. **SERIALIZABLE rend le code naïf correct, au prix le plus élevé.** L'invariant a tenu à chaque lancement avec le read-modify-write de vendredi, inchangé. Mais avec 10 comptes, il cumule les coûts des deux familles : il attend des verrous de ligne (un second écrivain attend le commit du premier, puis échoue en `40001`), il annule et rejoue (~1 265 `40001` par lancement), et il fait des deadlocks (~80 `40P01` par lancement, car ses écritures ne sont pas ordonnées). Résultat : **50 % d'échecs finaux et ~184× plus lent** que le pessimiste ordonné.
+6. **À faible contention, les stratégies sont à ~100 ms les unes des autres.** Avec 1 000 comptes, toutes tournent en 113 à 257 ms ; l'écart entre la meilleure et la pire passe de ~700× à ~2×. Le pessimiste ordonné reste un peu plus rapide que l'optimiste (165 contre 194 ms), comme dans la prédiction révisée : à faible contention, on n'attend presque jamais un verrou, et les deux stratégies font les mêmes allers-retours (2 lectures, 2 écritures), l'optimiste plus ses ~5 % de rejeux.
+7. **Le taux de conflits optimistes correspond à une estimation au dos de l'enveloppe.** Un virement touche 2 comptes pendant que ~15 autres en touchent ~30 : avec 1 000 comptes choisis uniformément, la probabilité d'un chevauchement est d'environ 1 − (1 − 2/1000)^30 ≈ 6 %. Mesuré : ~43 tentatives ratées pour ~800 virements (~5 %). Avec 10 comptes, un chevauchement est quasi certain, d'où les 44 % d'échecs finaux. Ce qui compte, c'est la **concurrence par compte**, dont le nombre de comptes n'est qu'un levier : avec 65 M d'utilisateurs, un compte marchand ou un compte de frais peut être aussi chaud que ces 10 comptes.
+8. **SERIALIZABLE annule bien plus que les vrais conflits.** Avec 1 000 comptes, l'optimiste mesure les vrais conflits d'écriture (~43 par lancement), mais SERIALIZABLE a levé ~311 `40001` par lancement, **~7× plus**, et **~5 % des virements ont échoué définitivement** à faible contention. Hypothèse, non vérifiée : des faux positifs de SSI. PostgreSQL suit les lectures avec des verrous de prédicat (SIREAD) plus grossiers qu'une ligne — une page entière pour un index B-tree (la clé primaire de 1 000 lignes tient dans quelques pages feuilles), toute la table pour un parcours séquentiel — donc deux virements sur des comptes différents mais voisins peuvent être considérés en conflit. Pour vérifier : compter les `40001` par message, *« due to concurrent update »* (vrai conflit d'écriture) contre *« due to read/write dependencies among transactions »* (détection SSI).
+9. **Zéro deadlock ne veut pas dire « aucun risque de deadlock ».** Avec 1 000 comptes, le non ordonné n'a fait aucun deadlock en 2 400 virements. Au volume de la production (des milliers de virements par seconde, quelques comptes très chauds), un croisement rare arrive tous les jours. Ordonner les verrous ne coûte rien et ferme la porte définitivement.
+10. **Des bugs rattrapés par les invariants.** (a) Première version optimiste : `version` n'était jamais incrémentée, donc `WHERE version = ?` correspondait toujours : c'était la stratégie naïve déguisée, et le total a augmenté de +42 550 (+4,3 %). (b) Deuxième version : le `WHERE` utilisait la version *incrémentée*, donc 100 % des tentatives étaient en conflit. (c) Dans le pessimiste non ordonné, la vérification des fonds testait encore l'ancienne sentinelle `-1` alors que `balance()` ne filtrait plus sur le montant : les fonds insuffisants n'étaient plus détectés en Java, et c'est la contrainte `CHECK (balance_minor >= 0)` qui rejetait l'`UPDATE` (les erreurs `23514` à 10 comptes, corrigé avant les lancements à 1 000 comptes). La contrainte en base était la dernière ligne de défense, et elle a tenu. Corollaire : avec cette contrainte, le contrôle « aucun solde négatif » ne peut jamais échouer ; c'est la somme des soldes qui teste vraiment la stratégie.
+11. **Notes de mesure.** Le premier lancement de chaque stratégie est plus lent (démarrage à froid : JIT, connexions, cache), d'où la médiane. La somme `ok + ignored + rejected + finalFailures (+ erreurs non rejouables) = 800` a tenu dans chaque lancement : aucun thread de worker n'est mort.
+
+### Conclusion pour la question 3
+
+Le choix d'une stratégie de concurrence dépend de la contention par compte, et Kobo montre dans quelle mesure. Sur 10 comptes chauds, verrouiller les deux comptes par id croissant — `SELECT … FOR UPDATE` ou `UPDATE` atomique conditionnel — a validé tous les virements en 0,2 à 0,3 s environ, sans deadlock ni rejeu. Les verrous non ordonnés ont été ~545× plus lents à cause des deadlocks, l'optimiste a laissé 44 % des virements en échec après 3 tentatives, et SERIALIZABLE, bien qu'il ait rendu le code naïf correct, en a fait échouer 50 % et a été ~184× plus lent. Sur 1 000 comptes calmes, toutes les stratégies étaient à ~100 ms les unes des autres, mais SERIALIZABLE annulait encore ~7 fois plus que les vrais conflits, avec ~5 % de virements en échec définitif. Par défaut : READ COMMITTED avec des verrous pris dans un ordre fixe, l'invariant étant aussi garanti par une contrainte `CHECK`. L'optimiste est réservé aux opérations longues, où un verrou serait gardé pendant une action de l'utilisateur ou un appel externe, et les comptes très chauds demandent une autre conception (semaine 5).

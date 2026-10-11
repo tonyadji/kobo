@@ -6,11 +6,20 @@ import java.sql.SQLException;
 public class AtomicTransfer implements TransferStrategy {
     @Override
     public void transfer(Connection c, long from, long to, long amount) throws SQLException {
-        var updatedRows = debit(c, from, amount);
-        if (updatedRows == 0) {
-            throw new InsufficientFundsException();
+        if (from < to) {
+            var updatedRows = debit(c, from, amount);
+            if (updatedRows == 0) {
+                throw new InsufficientFundsException();
+            }
+            credit(c, to, amount);
+        } else {
+            credit(c, to, amount);
+            var updatedRows = debit(c, from, amount);
+            if (updatedRows == 0) {
+                throw new InsufficientFundsException();
+            }
         }
-        credit(c, to, amount);
+
     }
 
     static long debit(Connection c, long id, long amount) throws SQLException {
