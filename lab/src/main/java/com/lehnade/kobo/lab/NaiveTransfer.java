@@ -3,7 +3,7 @@ package com.lehnade.kobo.lab;
 import java.sql.Connection;
 import java.sql.SQLException;
 
-public class NaiveTransfer implements TransferStrategy{
+public class NaiveTransfer implements TransferStrategy {
     @Override
     public void transfer(Connection c, long from, long to, long amount) throws SQLException {
         long fromBalance = balance(c, from);

@@ -17,6 +17,7 @@ public class NaiveEngine implements TransferEngine {
         }
         balances[from] -= amount;
         balances[to] += amount;
+        Work.simulate();
     }
 
     public long total() {
