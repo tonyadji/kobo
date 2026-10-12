@@ -11,10 +11,18 @@ public class AtomicTransfer implements TransferStrategy {
             if (updatedRows == 0) {
                 throw new InsufficientFundsException();
             }
-            credit(c, to, amount);
+            updatedRows = credit(c, to, amount);
+            if (updatedRows == 0) {
+                // TODO: beneficiary not found execption
+                throw new RuntimeException();
+            }
         } else {
-            credit(c, to, amount);
-            var updatedRows = debit(c, from, amount);
+            var updatedRows = credit(c, to, amount);
+            if (updatedRows == 0) {
+                // TODO: beneficiary not found execption
+                throw new RuntimeException();
+            }
+            updatedRows = debit(c, from, amount);
             if (updatedRows == 0) {
                 throw new InsufficientFundsException();
             }
@@ -31,11 +39,11 @@ public class AtomicTransfer implements TransferStrategy {
         }
     }
 
-    static void credit(Connection c, long id, long amount) throws SQLException {
+    static long credit(Connection c, long id, long amount) throws SQLException {
         try (var statement = c.prepareStatement("UPDATE lab_accounts SET balance_minor = balance_minor + ? WHERE id = ?")) {
             statement.setLong(1, amount);
             statement.setLong(2, id);
-            statement.executeUpdate();
+            return statement.executeUpdate();
         }
     }
 }

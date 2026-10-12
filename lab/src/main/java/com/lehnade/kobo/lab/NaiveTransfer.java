@@ -17,8 +17,9 @@ public class NaiveTransfer implements TransferStrategy{
     static long balance(Connection c, long id) throws SQLException {
         try (var statement = c.prepareStatement("SELECT balance_minor FROM lab_accounts WHERE id = ?")) {
             statement.setLong(1, id);
-            try (var resultSet = statement.executeQuery()){
-                return resultSet.next() ? resultSet.getLong(1) : -1;
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getLong(1);
             }
         }
     }
