@@ -106,3 +106,71 @@ Le pourcentage ne se compare pas : en S1, 10 comptes à 100 000 et environ 560 v
 | 1. Écart positif | ✅ Positif dans les 15 lancements |
 | 2. Plus grand qu'en S1 | ✅ en pourcentage et en valeur absolue, ❌ par virement : un virement en mémoire a environ 160 fois moins de chances de perdre un débit |
 | 3. Plus grand avec 10 comptes | ✅ environ 18 fois plus grand qu'avec 1 000 comptes, en valeur absolue |
+
+## Mardi 13 — `GlobalLockEngine`
+
+Tout le corps de `transfer` s'exécute dans `synchronized (lock)`, et `total()` aussi. `Work.simulate()` n'est appelé qu'après un virement réussi : un virement refusé (fonds insuffisants) ne garde presque pas le verrou.
+
+### Prédiction (avant mesure)
+
+| Comptes | `--work` | `--transfers` | Durée prédite |
+| ---: | ---: | ---: | --- |
+| 10 | 0 | 1 000 | non écrite (à faire avant de mesurer) |
+| 1 000 | 0 | 1 000 | non écrite |
+| 10 | 20 µs | 100 | 2 s |
+| 1 000 | 20 µs | 100 | 2,5 s |
+
+Plafond théorique d'un verrou unique : 1 / durée de la section critique = 1 / 20 µs = **50 000 virements/s**, quel que soit le nombre de threads ou de cœurs.
+
+### Méthode
+
+`EngineLab --engine=globalLock --threads=1000 --audit`, avec `--accounts` = 10 ou 1 000, `--work` = 0 ou 20, `--transfers` = 100 ou 1 000 (le guide prévoyait `--transfers=100` avec `--work=20` ; les lancements à 1 000 ont été ajoutés pour comparer). 3 lancements chacun, médiane gardée.
+
+⚠️ `--audit` était activé à chaque lancement : l'auditeur prend le verrou toutes les millisecondes. L'impact est faible, mais tous les moteurs doivent être mesurés dans les mêmes conditions cette semaine.
+
+### Résultats (médianes de 3 lancements)
+
+| Comptes | `--work` | `--transfers` | Durée | Acceptés | Refusés | Acceptés/s | Temps par virement accepté | Dispersion (min–max) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 10 | 0 | 1 000 | 180 ms | 822 812 | 77 135 | 4,57 M | ≈ 0,22 µs | 138–183 ms |
+| 1 000 | 0 | 1 000 | 194 ms | 907 263 | 91 727 | 4,68 M | ≈ 0,21 µs | 160–203 ms |
+| 10 | 20 µs | 100 | 2 515 ms | 82 269 | 7 829 | 32 711 | ≈ 30,6 µs | 2 490–2 541 ms |
+| 1 000 | 20 µs | 100 | 2 980 ms | 93 335 | 6 569 | 31 320 | ≈ 31,9 µs | 2 758–3 078 ms |
+| 10 | 20 µs | 1 000 | 23 863 ms | 823 946 | 76 387 | 34 528 | ≈ 29,0 µs | 23 859–24 998 ms |
+| 1 000 | 20 µs | 1 000 | 26 645 ms | 909 472 | 89 577 | 34 132 | ≈ 29,3 µs | 26 442–27 410 ms |
+
+Invariant `OK` dans les 18 lancements ; audit `min = max` (50 000 ou 5 000 000) à chaque lancement.
+
+### Vérifier l'instrument : combien dure vraiment `parkNanos(20 µs)` ?
+
+**Prédiction :** environ 30 µs.
+
+**Méthode :** 10 000 × `LockSupport.parkNanos(20_000)` dans un seul thread, sans verrou.
+
+**Résultat :** **28,1 µs par `park`**, soit 8 µs de plus que demandé.
+
+| | µs |
+| --- | ---: |
+| Un `parkNanos(20_000)` seul | 28,1 |
+| Un virement accepté sous le verrou global (`--transfers=1000`) | ≈ 29 |
+| **Coût de la passation du verrou** | **≈ 1** |
+
+### Constats
+
+- **Le nombre de comptes ne change rien au débit** (≈ 33 000–34 500/s avec 10 ou 1 000 comptes). Chaque virement fait la queue sur le même verrou, quels que soient les comptes touchés. Les lancements à 1 000 comptes durent plus longtemps seulement parce qu'ils font plus de travail utile : presque aucun `from == to` sauté (≈ 10 % avec 10 comptes), donc ≈ 909 000 virements acceptés au lieu de ≈ 823 000.
+- **Mesuré : ≈ 34 000/s, pour un plafond calculé de 50 000/s.** La formule tient ; c'est l'entrée qui était fausse : sur ce Mac, `--work=20` coûte en réalité ≈ 28 µs. Plafond réel : 1 / 28,1 µs ≈ 35 600/s, donc le verrou global atteint **≈ 97 % de son plafond réel**.
+- **La passation du verrou coûte ≈ 1 µs**, même avec 1 000 threads en attente. Presque toute la section critique est le travail fait sous le verrou.
+- **Sans travail, le verrou lui-même coûte ≈ 0,2 µs par virement** (≈ 4,6 M/s). Des lancements de 140–200 ms sont trop courts pour être précis (montée en charge du JIT, 30 % d'écart) : un ordre de grandeur seulement.
+- **La somme lue pendant les virements est toujours exacte**, parce que `total()` prend le même verrou que `transfer` (à comparer avec `NaiveEngine` : minimum 40 458 pour 50 000).
+- **Biais connu pour toute la semaine :** `--work=20` vaut ≈ 28 µs sur cette machine. Il s'applique à tous les moteurs, donc les comparaisons restent valables, mais les plafonds se calculent avec 28 µs.
+- Les lancements longs sont plus stables : ≈ 4–5 % d'écart avec `--transfers=1000`, jusqu'à 11 % avec `--transfers=100`.
+
+### Bilan de la prédiction
+
+| Prédiction | Verdict |
+| --- | --- |
+| 10 comptes, `--work=20` : 2 s | ❌ 2,5 s (+26 %) : la prédiction comptait 20 µs par virement ; le coût réel est ≈ 30 µs |
+| 1 000 comptes, `--work=20` : 2,5 s (plus long qu'avec 10 comptes) | ✅ sur le sens, ❌ sur la valeur : 3,0 s (+19 %) |
+| `parkNanos(20 µs)` dure ≈ 30 µs | ✅ 28,1 µs |
+
+**Référence pour la semaine :** un verrou plus fin n'a d'intérêt que s'il dépasse ≈ 34 000/s avec `--work=20` et ≈ 4,6 M/s sans travail.
