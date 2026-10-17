@@ -7,6 +7,8 @@ public final class Engines {
         return switch (name) {
             case "naive" -> new NaiveEngine(accounts, initialBalance);
             case "globalLock" -> new GlobalLockEngine(accounts, initialBalance);
+            case "unorderedLock" -> new UnorderedLockEngine(accounts, initialBalance);
+            case "orderedLock" -> new OrderedLockEngine(accounts, initialBalance);
             default -> throw new IllegalArgumentException("Unknown engine: " + name);
         };
     }

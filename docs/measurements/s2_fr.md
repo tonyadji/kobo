@@ -174,3 +174,157 @@ Invariant `OK` dans les 18 lancements ; audit `min = max` (50 000 ou 5 000 000) 
 | `parkNanos(20 µs)` dure ≈ 30 µs | ✅ 28,1 µs |
 
 **Référence pour la semaine :** un verrou plus fin n'a d'intérêt que s'il dépasse ≈ 34 000/s avec `--work=20` et ≈ 4,6 M/s sans travail.
+
+## Mercredi 14 — Un verrou par compte, et le deadlock
+
+`UnorderedLockEngine` et `OrderedLockEngine` : `long[] balances` et un `ReentrantLock` par compte (`ReentrantLock[] locks`, construit avec `Arrays.setAll`). Le moteur non ordonné verrouille `from`, puis `to`. Le moteur ordonné verrouille `min(from, to)`, puis `max(from, to)` : un seul endroit décide de l'ordre (règle de l'ADR-001). `total()` ne prend aucun verrou : ce n'est pas un instantané cohérent pendant les virements (à mesurer avec `--audit` jeudi).
+
+### Bugs trouvés avant de mesurer
+
+Trouvés en relecture de code, avant tout lancement mesuré. Chacun aurait rendu les mesures sans valeur.
+
+| # | Bug | Effet | Correction |
+| --- | --- | --- | --- |
+| 1 | `synchronized (balances[from])` sur un `Long[]` | Verrouille la *valeur*, pas le compte. `Long` est immuable : `balances[from] -= amount` met un **nouvel** objet dans la case, donc deux threads peuvent « tenir le compte 1 » en même temps. Au départ, `Arrays.fill` mettait **le même** `Long` dans toutes les cases (une seule conversion), et `Long.valueOf` partage les objets entre −128 et 127. | Séparer données et verrous : `long[]` + un objet verrou par compte, jamais remplacé |
+| 2 | Ordre fondé sur les soldes (`balances[from] < balances[to]`) | L'ordre change à chaque virement et il est lu sans verrou : deux threads peuvent voir deux ordres différents pour la même paire | Ordre par identifiant de compte |
+| 3 | `total()` verrouillait le tableau (`synchronized (balances)`) | Aucun virement ne prend ce verrou : aucune exclusion | Aucun verrou, documenté (voir plus haut) |
+| 4 | `Arrays.fill(locks, new ReentrantLock())` | `new` n'est évalué qu'une fois : **un seul** verrou partagé par tous les comptes, donc un verrou global caché (réentrant, donc jamais de deadlock) | `Arrays.setAll(locks, i -> new ReentrantLock())` |
+
+Lancements avec les versions boguées (exclus de la comparaison) :
+
+- Bug 2 (ancien `OrderedLockEngine`, `synchronized` sur `Long`) : **deadlock**. Prédiction : invariant cassé ou deadlock.
+- Bug 4 (`UnorderedLockEngine` avec un seul verrou partagé, `--accounts=10 --work=20`) : `STUCK after 30 s, ok=808,577, deadlocked threads=0`. **Pas un deadlock** : un verrou global, simplement trop lent pour le chien de garde de 30 s (≈ 37 µs par virement accepté, contre ≈ 29 µs avec `synchronized` ; un seul lancement, coupé avant la fin : une observation, pas une mesure).
+
+**Leçon :** `STUCK` est un délai dépassé, pas un diagnostic. Le diagnostic, c'est `deadlocked threads` (`ThreadMXBean.findDeadlockedThreads()`) ou `jstack`.
+
+### Prédiction (avant mesure)
+
+| Lancement | Prédiction | Raisonnement |
+| --- | --- | --- |
+| `globalLock` à nouveau, sans `--audit` | non écrite (lancement de contrôle) | — |
+| `unorderedLock`, 10 comptes, `--work=20` | ≈ 11 virements acceptés avant le deadlock | 45 paires, 1 000 threads : une collision en sens inverse arrive presque tout de suite (paradoxe des anniversaires) |
+| `unorderedLock`, 1 000 comptes, `--work=20` | ≈ 1 000 | — |
+| `orderedLock`, 10 comptes, `--work=0` | 22 M/s | 0,22 µs par virement sous le verrou global, avec plusieurs virements en parallèle |
+| `orderedLock`, 1 000 comptes, `--work=0` | 23 M/s | idem |
+| `orderedLock`, 10 comptes, `--work=20` | ≈ 175 000/s | plafond 5 paires en parallèle / 28 µs ≈ 180 000/s, atteint à 97 % comme le verrou global |
+| `orderedLock`, 1 000 comptes, `--work=20` | ≈ 17,5 M/s | plafond 500 paires en parallèle / 28 µs ≈ 18 M/s |
+| `orderedLock`, 100 000 comptes, `--work=20` | non écrite | — |
+| `naive`, 100 000 comptes, `--work=20` | non écrite | — |
+
+### Méthode
+
+`EngineLab --threads=1000 --transfers=1000`, threads classiques, **sans `--audit`** (contrairement à mardi), 3 lancements par configuration, médiane gardée. Le verrou global a été remesuré dans ces conditions pour que tous les moteurs soient comparés sur la même base.
+
+### Résultats : verrou global à nouveau, sans `--audit` (médianes de 3 lancements)
+
+| Comptes | `--work` | Durée | Acceptés | Refusés | Acceptés/s | Temps par virement accepté | Dispersion (min–max) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 10 | 0 | 223 ms | 823 907 | 75 861 | ≈ 3,7 M | — | 155–241 ms |
+| 1 000 | 0 | 171 ms | 908 187 | 90 795 | ≈ 5,3 M | — | 155–180 ms |
+| 10 000 | 0 | 254 ms | 934 253 | 65 638 | ≈ 3,7 M | — | 173–283 ms |
+| 10 | 20 µs | 23 785 ms | 824 367 | 75 936 | **34 659** | ≈ 28,9 µs | 23 721–23 870 ms |
+| 1 000 | 20 µs | 26 326 ms | 907 964 | 91 083 | **34 489** | ≈ 29,0 µs | 26 295–26 536 ms |
+| 10 000 | 20 µs | 27 147 ms | 933 931 | 65 952 | 34 402 | ≈ 29,1 µs | 26 964–27 514 ms |
+
+La série à 10 000 comptes a été lancée par erreur à la place de 1 000, puis 1 000 a été lancé aussi ; elle est gardée comme point supplémentaire. Lancé aussi avec `--transfers=100` (médianes) : 10 comptes : 47 ms (≈ 1,7 M/s) et 2 465 ms (33 454/s) ; 1 000 comptes : 40 ms (≈ 2,3 M/s) et 2 930 ms (31 872/s). Invariant `OK` dans les 27 lancements.
+
+### Résultats : deadlock (`unorderedLock`, 10 comptes, `--work=20`)
+
+`unorderedLock: STUCK after 30 s, ok=13, deadlocked threads=4`
+
+`jstack` pendant les 30 s (cycle en annexe) : un **cycle de 2 threads** (le thread 9 tient `…740` et attend `…7a0` ; le thread 15 tient `…7a0` et attend `…740`), avec les threads 1 et 8 bloqués derrière (1 → 8 → 9 ⇄ 15). `deadlocked threads=4` compte les threads du cycle **et** ceux qui sont bloqués dessus. Un vidage pris quelques secondes plus tard, lors d'un autre lancement, montrait **1 003 threads en attente d'un `ReentrantLock`, répartis sur les 10 verrous** (de 88 à 118 par verrou) : un cycle de 2 threads a gelé toute la banque, parce que chaque thread en attente tenait déjà un verrou.
+
+JUnit avec `unorderedLock` ajouté au `@ValueSource` : résultat non noté.
+
+### Résultats : `orderedLock` (médianes de 3 lancements)
+
+| Comptes | `--work` | Durée | Acceptés | Refusés | Acceptés/s | Verrou global (acceptés/s) | Écart | Dispersion (min–max) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 10 | 0 | 337 ms | 822 840 | 77 023 | ≈ 2,4 M | ≈ 3,7 M | −35 % | 329–355 ms |
+| 1 000 | 0 | 197 ms | 908 593 | 90 373 | ≈ 4,6 M | ≈ 5,3 M | −13 % (bruit) | 181–202 ms |
+| 10 | 20 µs | 29 349 ms | 823 068 | 76 829 | **28 044** | 34 659 | **−19 %** | 29 262–29 768 ms |
+| 1 000 | 20 µs | 20 688 ms | 906 830 | 92 205 | **43 833** | 34 489 | **+27 %** | 20 687–20 844 ms |
+| 100 000 | 20 µs | 13 463 ms | 991 324 | 8 660 | **73 633** | — | — | 13 354–13 480 ms |
+
+Invariant `OK` dans les 15 lancements.
+
+### Expérience : où est le plafond ? (`naive`, 100 000 comptes, `--work=20`)
+
+**Hypothèse :** si le faible gain des verrous par compte vient de la contention, il devrait presque disparaître avec 100 000 comptes. Le lancement `orderedLock` à 100 000 comptes dit le contraire : seulement ≈ 2 virements en cours. Pour savoir si ce sont les verrous qui limitent, on mesure un moteur **sans aucun verrou** dans les mêmes conditions.
+
+| Lancement | Durée | Acceptés | Acceptés/s | Écart |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 12 726 ms | 991 651 | 77 923 | −109 |
+| 2 | 12 435 ms | 991 546 | 79 738 | −639 |
+| 3 | 12 477 ms | 991 418 | 79 459 | +116 |
+
+**Médiane : 79 459/s**, seulement 8 % de plus que `orderedLock` (73 633/s). Invariant `BROKEN` dans les 3 lancements, avec un signe aléatoire.
+
+### Lire le débit avec la loi de Little
+
+Virements en cours en moyenne = débit × durée d'un virement (≈ 28,1 µs de travail) :
+
+| Moteur (`--work=20`) | Acceptés/s | En cours | Part du plafond du banc (≈ 80 000/s) |
+| --- | ---: | ---: | ---: |
+| Verrou global | 34 500 | ≈ 1,0 | ≈ 43 % |
+| Ordonné, 10 comptes | 28 044 | ≈ 0,8 | ≈ 35 % |
+| Ordonné, 1 000 comptes | 43 833 | ≈ 1,2 | ≈ 55 % |
+| Ordonné, 100 000 comptes | 73 633 | ≈ 2,1 | ≈ 93 % |
+| Naïf (sans verrou), 100 000 comptes | 79 459 | ≈ 2,2 | 100 % |
+
+### Constats
+
+- **L'ordre supprime les deadlocks, pas l'attente.** À 10 comptes, le moteur ordonné est **19 % plus lent qu'un seul verrou** (≈ 0,8 virement en cours). Un thread qui tient le compte 3 en attendant le compte 7 bloque tous ceux qui veulent le compte 3 (l'attente en tenant un verrou est toujours là), et chaque virement demande deux passations de verrou au lieu d'une (≈ 35,7 µs par virement accepté, contre ≈ 29 µs).
+- **Les verrous par compte ne sont rentables que si la contention est faible :** 28 000 → 44 000 → 74 000/s pour 10 → 1 000 → 100 000 comptes. Avec 1 000 threads et 1 000 comptes, 2 000 verrous sont demandés pour 1 000 comptes : presque chaque compte est disputé.
+- **Sans travail, le verrou global gagne** (3,7 M contre 2,4 M/s à 10 comptes) : quand il n'y a presque rien à faire sous le verrou, prendre deux verrous coûte plus que ce que le parallélisme rapporte, et le parallélisme est limité par les 10 cœurs, pas par le nombre de comptes. Lancements de 200–350 ms : ordre de grandeur seulement.
+- **Le banc a son propre plafond : ≈ 80 000/s à `--work=20` avec des threads classiques**, quel que soit le moteur (≈ 2 threads réellement actifs en même temps). Sans contention, les verrous par compte ne coûtent que ≈ 7 %. Hypothèse : le plafond vient des réveils de threads par le système (chaque `parkNanos` endort un vrai thread du système) ; à vérifier avec `--virtual` vendredi. Toutes les comparaisons de la semaine doivent se lire par rapport à ce plafond, pas aux 500 paires en parallèle théoriques.
+- **Une course rare reste un bug certain :** avec 100 000 comptes, le moteur naïf a cassé l'invariant dans les 3 lancements, de quelques centaines sur 500 M.
+- **La JVM ne détecte rien :** en S1, PostgreSQL a détecté ≈ 290 deadlocks et tué une transaction à chaque fois (150 s au lieu de l'infini). Ici, 13 virements sur 900 000 sont passés, puis le programme aurait attendu pour toujours.
+- **Comparer les virements acceptés par seconde, pas les durées.** Les virements refusés et les paires `from == to` sautées (≈ 10 % avec 10 comptes) n'appellent pas `Work.simulate()` : les lancements avec plus de comptes durent plus longtemps seulement parce qu'ils acceptent plus de virements (≈ 29 µs par virement accepté dans toutes les configurations du verrou global).
+- Sans `--audit`, le verrou global donne le même débit que mardi à `--work=20` (≈ 34 500/s) : l'audit ne coûtait rien de mesurable.
+
+### Bilan de la prédiction
+
+| Prédiction | Verdict |
+| --- | --- |
+| Non ordonné, 10 comptes : ≈ 11 virements avant le deadlock | ✅ 13 |
+| Non ordonné, 1 000 comptes : ≈ 1 000 | — non mesuré |
+| Ordonné, 10 comptes, `--work=0` : 22 M/s | ❌ ≈ 2,4 M/s (9 fois moins), et plus lent que le verrou global : sans travail, le lancement est limité par le processeur et chaque virement prend deux verrous |
+| Ordonné, 1 000 comptes, `--work=0` : 23 M/s | ❌ ≈ 4,6 M/s (5 fois moins) |
+| Ordonné, 10 comptes, `--work=20` : ≈ 175 000/s | ❌ 28 044/s (6 fois moins), et **plus lent** que le verrou global : le plafond supposait que les paires ne se recouvrent jamais |
+| Ordonné, 1 000 comptes, `--work=20` : ≈ 17,5 M/s | ❌ 43 833/s (400 fois moins) : la contention, plus le plafond du banc |
+| Ordonné et naïf, 100 000 comptes | non écrites |
+
+### Questions ouvertes
+
+1. D'où vient le plafond du banc (≈ 80 000/s) avec des threads classiques ? À vérifier avec `--virtual` (vendredi).
+2. Une passation de `ReentrantLock` disputé coûte-t-elle vraiment plus cher qu'une passation de `synchronized` sur cette machine (≈ 37 contre ≈ 29 µs, un seul lancement coupé) ? Un moteur à `ReentrantLock` global y répondrait.
+3. `unorderedLock` à 1 000 comptes : combien de virements avant le deadlock ?
+
+**Référence pour la suite de la semaine** (`--transfers=1000`, sans `--audit`) : verrou global ≈ 34 500/s avec `--work=20` et quelques M/s sans travail ; plafond du banc ≈ 80 000/s avec `--work=20` et des threads classiques.
+
+---
+
+## Annexe — `jstack`, `unorderedLock`, 10 comptes
+
+```
+Found one Java-level deadlock:
+=============================
+"pool-1-thread-1":
+  waiting for ownable synchronizer 0x000000070e85f650, (a java.util.concurrent.locks.ReentrantLock$NonfairSync),
+  which is held by "pool-1-thread-8"
+
+"pool-1-thread-8":
+  waiting for ownable synchronizer 0x000000070e85f740, (a java.util.concurrent.locks.ReentrantLock$NonfairSync),
+  which is held by "pool-1-thread-9"
+
+"pool-1-thread-9":
+  waiting for ownable synchronizer 0x000000070e85f7a0, (a java.util.concurrent.locks.ReentrantLock$NonfairSync),
+  which is held by "pool-1-thread-15"
+
+"pool-1-thread-15":
+  waiting for ownable synchronizer 0x000000070e85f740, (a java.util.concurrent.locks.ReentrantLock$NonfairSync),
+  which is held by "pool-1-thread-9"
+```
+
+Chaque pile du cycle se termine par `UnorderedLockEngine.transfer` → `UnorderedLockEngine.lock` → `ReentrantLock.lock` → `LockSupport.park`.
