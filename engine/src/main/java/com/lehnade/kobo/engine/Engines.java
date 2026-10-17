@@ -9,6 +9,7 @@ public final class Engines {
             case "globalLock" -> new GlobalLockEngine(accounts, initialBalance);
             case "unorderedLock" -> new UnorderedLockEngine(accounts, initialBalance);
             case "orderedLock" -> new OrderedLockEngine(accounts, initialBalance);
+            case "atomicEngine" -> new AtomicEngine(accounts, initialBalance);
             default -> throw new IllegalArgumentException("Unknown engine: " + name);
         };
     }

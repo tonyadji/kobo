@@ -73,10 +73,11 @@ public class EngineLab {
         engine.drain();
         long ms = (System.nanoTime() - t0) / 1_000_000;
         long after = engine.total();
+        long casFailures = engine.casFailures();
 
-        System.out.printf("%s accounts=%d threads=%d%s work=%dµs hot=%d%%: %d ms, ok=%d, rejected=%d, ok/s=%d%n",
+        System.out.printf("%s accounts=%d threads=%d%s work=%dµs hot=%d%%: %d ms, ok=%d, rejected=%d, ok/s=%d, casFailures=%d%n",
                 name, accounts, threads, virtual ? " (virtual)" : "", Work.micros, hot, ms,
-                ok.sum(), rejected.sum(), ms == 0 ? 0 : ok.sum() * 1000 / ms);
+                ok.sum(), rejected.sum(), ms == 0 ? 0 : ok.sum() * 1000 / ms, casFailures);
         if (audit) {
             System.out.printf("audit during run: min=%d max=%d%n", auditMin, auditMax);
         }

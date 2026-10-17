@@ -305,6 +305,107 @@ Virements en cours en moyenne = débit × durée d'un virement (≈ 28,1 µs de 
 
 ---
 
+## Jeudi 15 — `AtomicEngine` (CAS, sans verrou)
+
+Mesuré le samedi 17 (la semaine a environ deux jours de retard). `AtomicEngine` : `AtomicLongArray balances`. Débit : une boucle `while (true)` qui lit le solde, lève `InsufficientFundsException` s'il est trop bas, sinon tente `compareAndSet(from, current, current - amount)` ; en cas d'échec, elle incrémente `casFailures` (un `LongAdder` statique) et recommence. Puis `Work.simulate()`, puis le crédit par `addAndGet(to, amount)` (pas de règle métier, il ne peut pas échouer). `total()` lit les comptes un par un, sans verrou. `casFailures()` est une méthode `default` de `TransferEngine` (0 pour les autres moteurs), affichée par `EngineLab`.
+
+JUnit : `atomicEngine` ajouté au `@ValueSource`, **vert**.
+
+### Bugs trouvés avant de mesurer
+
+| # | Bug | Effet | Correction |
+| --- | --- | --- | --- |
+| 1 | Lecture et test du solde **avant** la boucle `while` | Après un CAS raté, la boucle réessaie avec la même valeur `expected` périmée et ne relit jamais le solde : elle tourne **à l'infini** à la première collision (sauf si le solde revient à l'ancienne valeur, un ABA). Même avec une relecture, un test hors de la boucle laisse un rejeu débiter un solde que personne n'a vérifié (→ solde négatif). | Lecture, test et CAS dans la boucle, sur la **même** valeur lue : un CAS réussi prouve que le test est encore vrai (même idée que `WHERE balance_minor >= ?` en S1) |
+| 2 | Moteur non déclaré dans `Engines.create` | `Unknown engine` | `case "atomicEngine"` |
+| 3 | `casFailures` inséré au milieu des arguments du `printf` | `rejected` aurait affiché les échecs de CAS, `ok/s` les refus et `casFailures` le débit | `casFailures` en dernier argument |
+
+### Prédiction (avant mesure)
+
+Hypothèse : un CAS coûte 0 (aucune idée de son coût ; à déduire des résultats). Échecs de CAS et audit non prédits.
+
+| Lancement | Prédiction | Raisonnement |
+| --- | --- | --- |
+| 10 comptes, `--work=0` | 500 M/s | 0,2 µs par virement, 10 en parallèle |
+| 10 comptes, `--work=20` | 357 000/s | 28 µs par virement, 10 en parallèle |
+| 1 000 comptes, `--work=0` | 50 G/s | 100 fois l'estimation à 10 comptes |
+| 1 000 comptes, `--work=20` | 35,7 M/s | 100 fois l'estimation à 10 comptes |
+
+### Méthode
+
+`EngineLab --threads=1000 --transfers=1000`, threads classiques, sans `--audit`, 3 lancements par configuration, médiane de chaque colonne. Puis un lancement par moteur avec `--audit --accounts=1000 --work=20`.
+
+### Résultats (médianes de 3 lancements)
+
+| Comptes | `--work` | Durée | Acceptés | Refusés | Acceptés/s | Échecs de CAS | Échecs par virement accepté | Écart (min–max) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 10 | 0 | 175 ms | 822 769 | 77 541 (8,6 %) | ≈ 4,7 M | 71 472 | **8,7 %** | 160–323 ms |
+| 1 000 | 0 | 172 ms | 909 435 | 89 592 (9,0 %) | ≈ 5,3 M | 2 480 | **0,27 %** | 170–174 ms |
+| 10 | 20 µs | 1 225 ms | 112 675 | 787 284 (**87 %**) | 91 889 | 491 | 0,44 % | 1 158–1 278 ms |
+| 1 000 | 20 µs | 11 399 ms | 899 123 | 99 862 (10 %) | **78 915** | 127 | 0,014 % | 11 354–11 417 ms |
+
+Invariant `OK` sur les 12 lancements. À 10 comptes sans travail, les échecs de CAS varient beaucoup d'un lancement à l'autre (67 981 à 152 060) : lancements de ≈ 170 ms, ordre de grandeur seulement.
+
+Comparaison avec mercredi (acceptés/s, sans `--audit`) :
+
+| Comptes | `--work` | Verrou global | Ordonné | Atomique |
+| ---: | ---: | ---: | ---: | ---: |
+| 10 | 0 | ≈ 3,7 M | ≈ 2,4 M | ≈ 4,7 M |
+| 1 000 | 0 | ≈ 5,3 M | ≈ 4,6 M | ≈ 5,3 M |
+| 10 | 20 µs | 34 659 | 28 044 | 91 889 (mais 87 % de refus) |
+| 1 000 | 20 µs | 34 489 | 43 833 | **78 915** (≈ le plafond du banc, 80 000/s) |
+
+### Audit (`--audit --accounts=1000 --work=20`, un lancement par moteur)
+
+Le banc lit `total()` toutes les millisecondes pendant les virements. Valeur attendue : 5 000 000.
+
+| Moteur | min | max | Acceptés/s |
+| --- | ---: | ---: | ---: |
+| `globalLock` | 5 000 000 | 5 000 000 | 34 353 |
+| `orderedLock` | 4 998 575 | **5 000 985** | 43 621 |
+| `atomicEngine` | **4 496 159** | 4 997 389 | 78 612 |
+
+Invariant `OK` après chaque lancement (tout l'argent est là **à la fin**). L'audit ne change pas le débit (mêmes valeurs que sans `--audit`).
+
+### Pourquoi l'audit donne ces résultats
+
+**`atomicEngine` : l'argent est en vol.** Quand `total()` s'exécute, certains virements ont été débités mais pas encore crédités. Environ 1 000 threads × 500 en moyenne ≈ 500 000, et l'audit a mesuré jusqu'à 503 841 manquants. Le max reste sous 5 000 000 : il n'y a jamais d'instant sans virement en vol. Chaque compte est atomique, le virement ne l'est pas : un plantage entre le débit et le crédit perdrait l'argent, et un lecteur le voit manquer.
+
+**`orderedLock` : la somme peut dépasser 5 000 000.** `total()` lit les comptes un par un, sans verrou. Exemple : le compte 5 a 200 et vire 150 au compte 500. `total()` lit le compte 5 (200 : les 150 y sont encore). Puis le virement s'exécute entièrement. Quand `total()` arrive au compte 500, les 150 y sont déjà : ils sont comptés deux fois. Dans l'autre sens (500 → 5), les 150 ne sont comptés nulle part et la somme est trop basse. Chaque virement est atomique, la lecture ne l'est pas (atomicité sur plusieurs comptes, pas des valeurs périmées). Correction : verrouiller tous les comptes dans l'ordre dans `total()`, ou prendre le verrou global.
+
+**`globalLock` : exact,** parce que `total()` prend le même verrou que `transfer()`.
+
+**S1 : un `SELECT sum(balance_minor)` pendant les virements aurait toujours été exact.** Il lit une photo (*snapshot*) prise au début de la requête. Pour chaque ligne, PostgreSQL renvoie la version visible dans cette photo (selon `xmin` et `xmax`). Un virement est une seule transaction qui valide ses deux lignes en même temps : la photo voit les deux nouvelles versions, ou aucune. Et les lecteurs ne bloquent pas les écrivains : la cohérence est gratuite. En mémoire, je ne l'obtiens qu'avec un verrou qui couvre les deux comptes (ou tous, pour une lecture), ou avec un grand livre.
+
+### Constats
+
+- **Les échecs de CAS suivent la contention, comme l'optimiste de S1, mais à un niveau bien plus bas :** 8,7 % de rejeux par virement accepté à 10 comptes, 0,27 % à 1 000 (≈ 30 fois moins). La fenêtre de course va de `balances.get(from)` au CAS : quelques nanosecondes, et `Work.simulate()` est **en dehors**. En S1, la fenêtre durait toute une transaction (des millisecondes).
+- **Pas la même métrique qu'en S1 :** les 44 % de S1 (10 comptes) étaient des **échecs définitifs après 3 rejeux** ; ici, ce sont des **rejeux**, et une boucle CAS n'abandonne jamais (0 échec définitif).
+- **Avec `--work=20`, encore moins d'échecs de CAS** (491 au lieu de 71 472 à 10 comptes) : les threads passent presque tout leur temps endormis dans `parkNanos`, donc peu d'entre eux sont dans la fenêtre en même temps.
+- **« Un CAS coûte 0 » tient à cette échelle :** sans travail, 10 et 1 000 comptes donnent le même débit (≈ 4,7 M et 5,3 M/s) malgré 30 fois plus d'échecs. Même à 100 ns par échec, 71 000 échecs coûtent ≈ 7 ms sur 175 ms.
+- **L'argent en vol fait refuser des virements légitimes :** à 10 comptes avec `--work=20`, **87 % des virements sont refusés** (contre 8,6 % sans travail). La banque détient 50 000, mais 1 000 threads × 500 en moyenne peuvent garder jusqu'à ≈ 500 000 en vol : les comptes sont presque toujours vides. L'invariant tient, et pourtant un client qui a assez d'argent recevrait « fonds insuffisants ».
+- **À 1 000 comptes, le moteur atomique atteint le plafond du banc** (78 915/s ≈ 80 000/s) : 2,3 fois le verrou global, 1,8 fois le moteur ordonné. La limite n'est plus le moteur.
+- **L'audit mesure directement les virements en vol :** ≈ 504 000 / 500 ≈ **1 000 virements en vol**, c'est-à-dire presque tous les threads entre leur débit et leur crédit. Avec la loi de Little, 1 000 en vol / 79 000 par seconde ≈ **12,7 ms par virement**, et non 28 µs. Le « ≈ 2,2 en vol » de mercredi (calculé avec 28 µs) comptait les virements *en train de travailler*, pas les virements *commencés et pas finis*. Interprétation (à vérifier) : après ses 20 µs de `parkNanos`, un thread classique attend ≈ 12 ms pour retrouver un cœur ; c'est le coût de réveil par l'OS derrière le plafond de ≈ 80 000/s.
+
+### Bilan de la prédiction
+
+| Prédiction | Verdict |
+| --- | --- |
+| 10 comptes, `--work=0` : 500 M/s | ❌ ≈ 4,7 M/s. Erreur d'unité : 1 / 0,2 µs = 5 M/s, donc le raisonnement donnait 50 M/s, pas 500 M/s. Sans travail, la limite, ce sont les 10 cœurs et le banc lui-même, pas les comptes |
+| 10 comptes, `--work=20` : 357 000/s | ❌ 91 889/s, avec 87 % de refus. Le moteur ne tient rien pendant le travail : le nombre de comptes ne limite pas le parallélisme ; l'argent en vol, si |
+| 1 000 comptes, `--work=0` : 50 G/s | ❌ ≈ 5,3 M/s. Pas de contrôle de vraisemblance : 10 cœurs ne font pas 50 milliards de virements par seconde, et 900 000 virements dureraient 18 µs |
+| 1 000 comptes, `--work=20` : 35,7 M/s | ❌ 78 915/s : le plafond du banc (réveil des threads par l'OS) |
+| « Un CAS coûte 0 » | ✅ cohérent avec les résultats à cette échelle |
+| Échecs de CAS, audit | non écrits |
+
+La méthode de prédiction (quelle ressource limite, formule du plafond, unités, contrôle de vraisemblance) est un point de travail pour les prochaines séances.
+
+### Questions ouvertes
+
+1. Où un thread classique passe-t-il ≈ 12,7 ms par virement, quand le travail dure 28 µs ? À vérifier avec `--virtual` (vendredi) : si le coût de réveil est la limite, le débit et l'argent en vol devraient beaucoup changer.
+2. Le taux de refus de 87 % à 10 comptes baisse-t-il avec `--virtual` ou avec moins de threads (moins d'argent en vol) ?
+
+---
+
 ## Annexe — `jstack`, `unorderedLock`, 10 comptes
 
 ```

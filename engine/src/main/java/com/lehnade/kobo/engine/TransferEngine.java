@@ -5,5 +5,7 @@ public interface TransferEngine {
 
     long total();
 
+    default long casFailures() { return 0L; }
+
     default void drain() throws InterruptedException {}
 }
