@@ -37,11 +37,16 @@ public class OrderedLockEngine implements TransferEngine {
 
     @Override
     public long total() {
-        long sum = 0;
-        for (long balance : balances) {
-            sum += balance;
+        lockAll();
+        try {
+            long sum = 0;
+            for (long balance : balances) {
+                sum += balance;
+            }
+            return sum;
+        } finally {
+            unlockAll();
         }
-        return sum;
     }
 
     private void lock(int id) {
@@ -50,5 +55,17 @@ public class OrderedLockEngine implements TransferEngine {
 
     private void unlock(int id) {
         locks[id].unlock();
+    }
+
+    private void lockAll() {
+        for (int i = 0; i < locks.length; i++) {
+            locks[i].lock();
+        }
+    }
+
+    private void unlockAll() {
+        for (int i = 0; i < locks.length; i++) {
+            locks[i].unlock();
+        }
     }
 }
