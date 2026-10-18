@@ -465,6 +465,98 @@ Invariant `OK` dans les 6 lancements. Minimum de l'audit de `queue` par lancemen
 
 ---
 
+## Samedi 17 — Comparaison des moteurs
+
+Mesuré le dimanche 18. Cases manquantes remplies pour `queue` (1 000 comptes), lenteur de `queue` étudiée, et `orderedLock` relancé avec un `total()` verrouillé. Colonnes « compte chaud » et « threads virtuels » du tableau prévu sautées (retard de la semaine), sauf pour l'étude de `queue`.
+
+### Prédiction (avant mesure)
+
+| Lancement | Prédiction | Raisonnement |
+| --- | --- | --- |
+| `queue`, 1 000 comptes, `--work=0` | Pas de différence avec 10 comptes | Un crédit attend derrière 1 000 threads / N débits ; le nombre de comptes n'y change rien (métrique non nommée) |
+| `queue`, 1 000 comptes, `--work=20` | Plus de 30 s, `STUCK` | 45 fois plus lent que `orderedLock` à `--work=0` |
+| `queue`, `--work=20`, `--transfers=100` (100 000 virements) | ≈ 0,29 s | Plafond : 10 shards / 28 µs ≈ 357 000/s |
+| Idem, `--virtual` et `--threads=100` | non écrite | Coût du réveil d'un thread inconnu |
+| `orderedLock` avec un `total()` verrouillé | Débit plus bas (sans chiffre) ; audit min = max = 5 000 000 | Prendre et relâcher tous les verrous bloque les virements |
+
+### Méthode
+
+`EngineLab --threads=1000 --transfers=1000 --audit`, threads classiques sauf mention contraire, 3 lancements et médiane quand c'est indiqué, sinon un seul lancement. Pour le `total()` verrouillé, `OrderedLockEngine.total()` prend les 1 000 verrous par id croissant (le même ordre que `transfer()`, donc pas de deadlock), additionne, puis les relâche.
+
+### Résultats : `queue`, 1 000 comptes, `--work=0` (médianes de 3 lancements)
+
+| Durée | Acceptés | Refusés | Acceptés/s | Audit min / max (pire des 3 lancements) | Dispersion (min–max) |
+| ---: | ---: | ---: | ---: | --- | --- |
+| 18 280 ms | 901 942 | 97 048 (**9,7 %**) | 49 340 | 4 508 253 / 5 000 000 | 18 203–18 557 ms |
+
+Invariant `OK` dans les 3 lancements. À comparer avec 10 comptes (vendredi) : 16 393 ms, 77 % de refus, audit min 327 / 50 000.
+
+### Résultats : `queue`, 1 000 comptes, `--work=20`
+
+Avec `--transfers=1000` et des threads classiques, 3 lancements sur 3 se sont terminés par `STUCK after 30 s` (acceptés = 840 230 ; 854 967 ; 842 957, soit ≈ 28 000/s) et `deadlocked threads=0` : un **dépassement du délai, pas un deadlock**. Le moteur avançait toujours.
+
+Avec `--transfers=100` (100 000 virements), un lancement chacun :
+
+| Appelants | Durée | Acceptés | Refusés | Acceptés/s | Part du plafond de 357 000/s | Audit min | Argent en vol (max) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 000 threads classiques | 3 199 ms | 92 606 | 7 297 (7,3 %) | 28 948 | 8 % | 4 471 838 | 10,6 % |
+| 1 000 threads **virtuels** | 673 ms | 92 447 | 7 454 (7,5 %) | **137 365** | 38 % | 4 476 012 | 10,5 % |
+| **100** threads classiques (`--transfers=1000`) | 869 ms | 93 675 | 6 220 (6,2 %) | 107 796 | 30 % | 4 934 842 | **1,3 %** |
+
+Avec `--virtual` et `--transfers=1000` (un lancement) : 5 601 ms, 900 863 acceptés, **160 839/s**.
+
+Invariant `OK` dans tous les lancements terminés.
+
+### Résultats : `orderedLock` avec un `total()` verrouillé (1 000 comptes, `--work=20`, un lancement)
+
+| `total()` | Durée | Acceptés | Refusés | Acceptés/s | Audit min / max |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Sans verrou (médiane de mercredi ; audit d'un lancement du dimanche 18) | 20 688 ms | 906 830 | 92 205 | 43 833 | 4 997 463 / 5 002 828 |
+| **Tous les verrous, ordre croissant** | 19 443 ms | 908 554 | 90 441 | 46 729 | **5 000 000 / 5 000 000** |
+
+### Tableau comparatif
+
+Acceptés/s, médianes de 3 lancements, `--threads=1000 --transfers=1000`, threads classiques sauf mention contraire.
+
+| Moteur | 10 comptes, work 0 | 1 000 comptes, work 0 | 1 000 comptes, work 20 | Audit cohérent ? (1 000 comptes) | Deadlock possible ? |
+| --- | ---: | ---: | ---: | --- | --- |
+| `naive` | `BROKEN` (+621 542) | `BROKEN` (+34 033) | non lancé | — (invariant cassé) | Non |
+| `globalLock` | ≈ 3,7 M | ≈ 5,3 M | 34 489 | ✅ 5 000 000 / 5 000 000 | Non |
+| `unorderedLock` | `STUCK` (`--work=20`, 13 virements) | non lancé | non lancé | — (`STUCK`) | **Oui** |
+| `orderedLock` | ≈ 2,4 M | ≈ 4,6 M | 43 833 (46 729 avec un `total()` verrouillé, un lancement) | ❌ lecture sans verrou : 4 997 463 / 5 002 828 ; ✅ lecture verrouillée : 5 000 000 / 5 000 000 | Non (ordre fixe) |
+| `atomicEngine` | ≈ 4,7 M | ≈ 5,3 M | **78 915** | ❌ 4 496 159 / 4 997 389 (argent en vol) | Non |
+| `queue` | 12 591 (77 % refusés) | 49 340 | > 30 s (délai dépassé) ; 160 839 avec `--virtual` (un lancement) | ❌ 4 508 253 / 5 000 000 à `--work=0` (argent en vol) | Non |
+
+Sources : lundi (`naive`, écart final), mercredi (`globalLock` sans `--audit`, `orderedLock`, `unorderedLock`), jeudi (`atomicEngine`, audit de `globalLock`), vendredi et dimanche 18 (`queue`, audits d'`orderedLock`).
+
+### Constats
+
+- **L'argent en vol de `queue` dépend du nombre d'appelants, pas du type de thread.** Chaque appelant a au plus un virement en vol, d'environ 500 en moyenne : 1 000 appelants × 500 ≈ 500 000, soit **10 % de 5 000 000** (mesuré 10,5–10,6 %) ; 100 appelants × 500 ≈ 50 000, soit **1 %** (mesuré 1,3 %). À 10 comptes, 500 000 dépasse les 50 000 de la banque, d'où 99 % en vol vendredi. C'est la loi de Little : en vol = débit × temps passé dans le système.
+- **Le prix de l'argent en vol dépend de la contention par compte, pas du débit.** `queue` met à peu près le même temps avec 10 ou 1 000 comptes (16,4 s contre 18,3 s), mais refuse 77 % contre 9,7 % : environ 100 débits attendent par compte à 10 comptes, environ 1 à 1 000.
+- **La lenteur de `queue` venait des appelants en threads classiques, pas des files.** Même moteur, mêmes 1 000 appelants : 4,7 fois plus rapide en threads virtuels (28 948 → 137 365/s), 3,7 fois plus rapide avec 10 fois moins de threads classiques (107 796/s). Réveiller un thread virtuel ne passe pas par le système. Cela répond aussi à la question 1 de jeudi : en threads virtuels, `queue` dépasse le plafond du banc d'essai (≈ 80 000/s en threads classiques).
+- **`STUCK` n'est pas toujours un deadlock.** Avec `queue` à `--work=20`, le banc d'essai a dépassé son délai avec `deadlocked threads=0` et ≈ 840 000 virements faits : le moteur était lent, pas bloqué.
+- **Les virements d'`orderedLock` sont atomiques ; seule sa lecture ne l'était pas.** Avec un `total()` qui prend tous les verrous dans le même ordre, l'audit lit exactement 5 000 000 à chaque fois. `atomicEngine` ne se corrige pas de cette façon : il n'y a aucun verrou à prendre, l'argent est vraiment dans un thread entre le CAS et le crédit.
+- **La lecture cohérente sous tous les verrous n'a rien coûté de mesurable ici** (46 729/s sur un lancement, contre 43 833/s en médiane) : un audit par milliseconde, un seul thread. Son coût grandit avec la fréquence des lectures et avec le nombre de comptes.
+- **À `--work=20`, `atomicEngine` est limité par le plafond du banc d'essai** (78 915/s ≈ 80 000/s en threads classiques) : l'écart de 1,8 fois avec `orderedLock` est une borne basse.
+
+### Bilan de la prédiction
+
+| Prédiction | Verdict |
+| --- | --- |
+| `queue` : pas de différence entre 10 et 1 000 comptes | ✅ pour la durée (16,4 contre 18,3 s), ❌ pour les refus (77 % contre 9,7 %) et l'argent en vol (99 % contre 10 %). La métrique n'était pas nommée |
+| `queue`, `--work=20` : plus de 30 s, `STUCK` | ✅ mais pour une mauvaise raison : un rapport mesuré à `--work=0` ne se transpose pas à une autre configuration. La formule du plafond (357 000/s) disait que le délai ne serait **pas** dépassé |
+| `queue`, 100 000 virements : ≈ 0,29 s | ❌ 3 199 ms (11 fois plus lent) : la limite venait des appelants, pas des shards |
+| `orderedLock`, `total()` verrouillé : débit plus bas | Non visible (un lancement, +7 %, dans le bruit). Sans ordre de grandeur, la prédiction ne pouvait pas être vérifiée ; une borne l'aurait permis : durée d'une lecture (quelques dizaines de µs) / 1 ms entre deux lectures → quelques % au plus |
+| `orderedLock`, `total()` verrouillé : audit min = max = 5 000 000 | ✅ |
+
+### Questions ouvertes
+
+1. En threads virtuels, `queue` n'atteint que 38 % du plafond de 357 000/s : les crédits passent aussi par les files, et `parkNanos` est moins précis sous charge. Non étudié.
+2. `atomicEngine` et `orderedLock` avec `--virtual` : l'écart entre les deux grandit-il une fois le plafond du banc d'essai levé ?
+3. Combien de temps dure un `total()` verrouillé (`System.nanoTime()` autour, 3 lancements) ?
+
+---
+
 ## Annexe — `jstack`, `unorderedLock`, 10 comptes
 
 ```
