@@ -10,6 +10,7 @@ public final class Engines {
             case "unorderedLock" -> new UnorderedLockEngine(accounts, initialBalance);
             case "orderedLock" -> new OrderedLockEngine(accounts, initialBalance);
             case "atomicEngine" -> new AtomicEngine(accounts, initialBalance);
+            case "queue" -> new ShardedQueueEngine(accounts, initialBalance);
             default -> throw new IllegalArgumentException("Unknown engine: " + name);
         };
     }

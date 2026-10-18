@@ -406,6 +406,65 @@ La méthode de prédiction (quelle ressource limite, formule du plafond, unités
 
 ---
 
+## Vendredi 16 — `ShardedQueueEngine` (un seul écrivain par compte)
+
+Mesuré le dimanche 18. `ShardedQueueEngine` : ni verrou, ni atomique. `long[] balances` et N exécuteurs à un seul thread (`Executors.newSingleThreadExecutor()`), avec N = `Runtime.getRuntime().availableProcessors()` = **10** sur ce Mac. Le compte `id` appartient toujours au shard `id % N` : **un seul thread écrit dans un compte donné**. Un virement, ce sont deux messages : le débit est envoyé au shard de l'émetteur (test du solde, débit, `Work.simulate()`), et l'appelant l'attend avec `Future.get()` ; la tâche de débit envoie ensuite le crédit au shard du destinataire avec `execute()`, sans l'attendre. `drain()` envoie une tâche vide à chaque shard et l'attend (les files sont FIFO, donc tous les crédits déjà en file sont appliqués), puis arrête le shard. `total()` lit les comptes un par un, sans verrou.
+
+JUnit : `shardedEngine` ajouté au `@ValueSource`, **vert**. Code relu avant de mesurer : aucun bug trouvé. `drain()` déclare maintenant `throws InterruptedException` au lieu de l'envelopper.
+
+### Prédiction (avant mesure)
+
+| Lancement | Prédiction | Raisonnement |
+| --- | --- | --- |
+| 10 comptes, `--work=0` : refus, `queue` contre `orderedLock` | `queue` refuse **moins** | non écrit |
+
+### Méthode
+
+`EngineLab --threads=1000 --transfers=1000 --accounts=10 --work=0 --audit`, threads classiques, 3 lancements par moteur, médiane gardée. Les deux moteurs ont été lancés avec `--audit` (pas `orderedLock` mercredi) : ils se comparent seulement entre eux.
+
+### Résultats (médianes de 3 lancements)
+
+| Moteur | Durée | Acceptés | Refusés | Acceptés/s | Audit min / max | Dispersion (min–max) |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| `orderedLock` | 365 ms | 823 255 | 76 625 (**8,5 %**) | ≈ 2,25 M | 48 076 / 51 200 (pire des 3 lancements) | 345–380 ms |
+| `queue` | **16 393 ms** | 207 389 | 692 596 (**77 %**) | 12 591 | **327** / 50 000 (pire des 3 lancements) | 16 320–16 640 ms |
+
+Invariant `OK` dans les 6 lancements. Minimum de l'audit de `queue` par lancement : 420, 345, 327.
+
+### Pourquoi `queue` refuse autant de virements
+
+**L'argent est dans les files de crédits, pas dans les soldes.** L'audit a vu **327 sur 50 000** à un moment : **99,3 % de l'argent était en vol** (débité, crédit pas encore appliqué).
+
+1. **Un crédit attend derrière environ 100 débits.** Les 1 000 appelants ont chacun un débit en attente (ils attendent sur `get()`), répartis sur 10 shards : environ 100 débits par shard. Avec 10 comptes et 10 shards, c'est à peu près un compte par shard. Un crédit envoyé à un shard se place au bout de cette file.
+2. **Ces débits voient un solde vide.** Un solde démarre à 5 000 et un virement fait environ 500 en moyenne : environ 10 débits vident un compte. Dès qu'un crédit est appliqué, les débits suivants de la file le reprennent. L'argent passe très peu de temps dans un solde, et longtemps dans une file.
+3. **Le phénomène s'auto-entretient.** Un refus est très rapide, donc l'appelant renvoie aussitôt un nouveau débit, et la file devant chaque crédit reste pleine.
+
+**Contrôle de vraisemblance :** le modèle dit que seule une minorité de débits peut passer (environ 10 à chaque réapprovisionnement, sur environ 100 débits en file) : quelques dizaines de pour cent au plus. Mesuré : 207 389 / 899 985 ≈ **23 % acceptés**. Même ordre de grandeur : le modèle tient.
+
+**`orderedLock` n'a pas ce problème :** le débit et le crédit se font dans la même section critique, sous les deux verrous, donc l'argent n'est en vol que pendant la durée d'un virement. Les écarts de son audit (48 076 à 51 200) viennent seulement de la lecture compte par compte, sans instantané (voir jeudi). Le maximum de `queue` vaut exactement 50 000 : c'est la première lecture, avant que l'argent ne commence à circuler.
+
+### Constats
+
+- **Pas de verrou, pas de deadlock, pas de rejeu de CAS, et pourtant le pire moteur à 10 comptes :** 77 % des virements refusés, contre 8,5 % pour `orderedLock`. L'invariant tient, et pourtant des clients qui ont assez d'argent reçoivent « fonds insuffisants ».
+- **Même mécanisme que le moteur atomique, poussé à l'extrême :** jeudi, `atomicEngine` à 10 comptes avec `--work=20` refusait 87 %, parce que l'argent était en vol pendant `Work.simulate()`. Ici, il n'y a aucun travail, et l'argent est en vol parce que le crédit attend dans une file.
+- **Un seul écrivain par compte supprime les courses, pas l'écart entre débit et crédit.** Chaque compte est cohérent ; le virement n'est pas atomique. C'est exactement ce que donne un topic Kafka partitionné par `account_id` : l'ordre par compte, aucun verrou, et de l'argent en vol entre deux partitions.
+- **Beaucoup plus lent :** 12 591 acceptés/s contre ≈ 2,25 M/s. Comparer les acceptés/s est biaisé (77 % de refus), donc on compte les appels traités : (acceptés + refusés) / durée ≈ 899 985 / 16,4 s ≈ **55 000/s**, toujours environ 45 fois plus lent que `orderedLock` (≈ 2,5 M appels/s). Avec la loi de Little : 1 000 appelants en attente / 55 000 par seconde ≈ **18 ms par appel**, pour quelques nanosecondes de vrai travail. Hypothèse (à vérifier) : chaque virement est un aller-retour entre threads (file, `get()`, réveil de l'appelant), et 1 000 threads classiques se disputent 10 cœurs ; même ordre de grandeur que les ≈ 12,7 ms par virement de jeudi.
+
+### Bilan de la prédiction
+
+| Prédiction | Verdict |
+| --- | --- |
+| `queue` refuse moins de virements que `orderedLock` à 10 comptes | ❌ **9 fois plus** (77 % contre 8,5 %). Les refus ne viennent pas des conflits, mais de ce que voit le débit : l'argent en vol fait paraître les soldes plus bas qu'ils ne sont |
+
+### Questions ouvertes
+
+1. Pourquoi `balances` n'a besoin ni de `volatile` ni d'un atomique, alors que 10 threads de shard utilisent le même tableau ? (Quel thread écrit dans quelle case, et quelle relation *happens-before* rend le `total()` final correct ?)
+2. Pendant `--audit`, `total()` lit `balances` depuis le thread principal, sans *happens-before* avec les shards : peut-il voir des valeurs périmées ? Qu'est-ce que ça change au min et au max ?
+3. Où passent les ≈ 18 ms par appel ? Même cause que les ≈ 12,7 ms de jeudi ? À vérifier avec `--virtual`.
+4. Non lancés (sautés à cause du retard de la semaine) : `--virtual` et `--hot=50` pour chaque moteur correct.
+
+---
+
 ## Annexe — `jstack`, `unorderedLock`, 10 comptes
 
 ```
