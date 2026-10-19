@@ -21,11 +21,11 @@ public class TransferRunner {
     static final String RESULTS_TXT = "results.txt";
 
     public static void run(String[] args, List<TransferStrategy> strategies) throws SQLException, InterruptedException {
-        int numberOfExecutions = Integer.parseInt(args[2]);
+        int numberOfExecutions = Integer.parseInt(args[1]);
         for (int exec = 0; exec < numberOfExecutions; exec++) {
             writeToFile(String.format("==================== EXECUTION %d/%d ====================%n", exec + 1, numberOfExecutions));
 
-            int ACCOUNTS = Integer.parseInt(args[1]);
+            int ACCOUNTS = Integer.parseInt(args[0]);
             writeToFile(String.format("ACCOUNTS=%d, - INITIAL BALANCE=%d%n", ACCOUNTS, INITIAL_BALANCE));
             for (TransferStrategy strategy : strategies) {
                 System.out.println("Running " + strategy.getClass().getSimpleName());
