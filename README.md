@@ -12,6 +12,7 @@ A mini neobank to **measure, not guess**, how money moves safely under concurren
 | `docs/adr/` | Decisions: [ADR-001](docs/adr/ADR-001.md) (database transfers), [ADR-003](docs/adr/ADR-003.md) (in-memory engine) |
 | `docs/measurements/` | Every run, prediction and finding: [week 1](docs/measurements/s1.md), [week 2](docs/measurements/s2.md) |
 | `katas/` | Timed live-coding exercises in TDD (load balancer, rate limiter, URL shortener, LRU cache) |
+
 ## Key findings
 
 - **Lock ordering:** 150 s → 0.28 s for 800 transfers on 10 hot accounts, deadlocks gone.
