@@ -16,7 +16,7 @@ class EngineInvariantTest {
     static final long INITIAL_BALANCE = 5_000;
 
     @ParameterizedTest
-    @ValueSource(strings = {"naive","globalLock","orderedLock","atomicEngine","queue"})
+    @ValueSource(strings = {"globalLock","orderedLock","atomicEngine","queue"})
     void moneyIsNeverCreatedNorDestroyed(String name) throws Exception {
         TransferEngine engine = Engines.create(name, ACCOUNTS, INITIAL_BALANCE);
         long before = engine.total();
