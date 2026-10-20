@@ -2,6 +2,7 @@ package com.lehnade.kobo.katas.loadbalancer.v1;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Random;
 
 public class LoadBalancer {
 
@@ -26,5 +27,13 @@ public class LoadBalancer {
 
     public Collection<String> getInstances() {
         return instances;
+    }
+
+    public String get() {
+        if (instances.isEmpty()) {
+            throw new IllegalStateException("No instances registered");
+        }
+        int index = new Random().nextInt(instances.size());
+        return instances.get(index);
     }
 }

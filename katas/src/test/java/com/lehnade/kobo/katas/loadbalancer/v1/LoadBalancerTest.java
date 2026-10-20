@@ -71,4 +71,34 @@ public class LoadBalancerTest {
         Assertions.assertEquals("Address cannot be null or blank", blankAddressException.getMessage());
         Assertions.assertEquals(0, loadBalancer.getInstances().size());
     }
+
+    @Test
+    void getShouldFailWithNoInstancesRegistered() {
+        // arrange
+        var loadBalancer = new LoadBalancer();
+
+        // act
+        IllegalStateException noInstancesRegisteredException = Assertions.assertThrows(IllegalStateException.class,
+                () -> loadBalancer.get());
+
+        // assert
+        Assertions.assertEquals("No instances registered", noInstancesRegisteredException.getMessage());
+        Assertions.assertEquals(0, loadBalancer.getInstances().size());
+    }
+
+    @Test
+    void getShouldReturnOneRegisteredInstanceAtRandom() {
+        // arrange
+        var loadBalancer = new LoadBalancer();
+        for (int i = 0; i < 10; i++) {
+            loadBalancer.register("localhost:800" + i);
+        }
+
+        // act
+        String instance = loadBalancer.get();
+
+        // assert
+        Assertions.assertNotNull(instance);
+        Assertions.assertTrue(loadBalancer.getInstances().contains(instance));
+    }
 }
