@@ -52,4 +52,23 @@ public class LoadBalancerTest {
         Assertions.assertEquals("Instance already registered", exception.getMessage());
         Assertions.assertEquals(1, loadBalancer.getInstances().size());
     }
+
+    @Test
+    void nullOrBlankMustBeRejected() {
+        // arrange
+        String blankAddress = "";
+        var loadBalancer = new LoadBalancer();
+
+        // act
+        IllegalArgumentException nullAddressException = Assertions.assertThrows(IllegalArgumentException.class,
+                () -> loadBalancer.register(null));
+
+        IllegalArgumentException blankAddressException = Assertions.assertThrows(IllegalArgumentException.class,
+                () -> loadBalancer.register(blankAddress));
+
+        // assert
+        Assertions.assertEquals("Address cannot be null or blank", nullAddressException.getMessage());
+        Assertions.assertEquals("Address cannot be null or blank", blankAddressException.getMessage());
+        Assertions.assertEquals(0, loadBalancer.getInstances().size());
+    }
 }

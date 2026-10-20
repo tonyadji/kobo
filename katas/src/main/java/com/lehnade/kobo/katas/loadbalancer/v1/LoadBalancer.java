@@ -15,6 +15,9 @@ public class LoadBalancer {
         if (instances.size() >= 10) {
             throw new IllegalStateException("Maximum number of instances reached");
         }
+        if (address == null || address.isBlank()) {
+            throw new IllegalArgumentException("Address cannot be null or blank");
+        }
         if (instances.contains(address)) {
             throw new IllegalStateException("Instance already registered");
         }
