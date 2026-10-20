@@ -7,8 +7,10 @@ import java.util.Random;
 public class LoadBalancer {
 
     private final ArrayList<String> instances;
+    private final LoadBalancerStrategy strategy;
 
-    public LoadBalancer() {
+    public LoadBalancer(LoadBalancerStrategy strategy) {
+        this.strategy = strategy;
         instances = new ArrayList<>();
     }
 
@@ -33,7 +35,6 @@ public class LoadBalancer {
         if (instances.isEmpty()) {
             throw new IllegalStateException("No instances registered");
         }
-        int index = new Random().nextInt(instances.size());
-        return instances.get(index);
+        return strategy.get(instances);
     }
 }

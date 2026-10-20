@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 
 public class LoadBalancerTest {
 
+    LoadBalancerStrategy randomStrategy = new RandomStrategy();
+
     @Test
     void shouldRegisterAndInstance() {
         // arrange
@@ -12,7 +14,7 @@ public class LoadBalancerTest {
 
         // act
         // the call to register method
-        var loadBalancer = new LoadBalancer();
+        var loadBalancer = new LoadBalancer(randomStrategy);
         loadBalancer.register(address);
 
         // assert
@@ -23,7 +25,7 @@ public class LoadBalancerTest {
     @Test
     void atMostTenInstancesCanBeRegistered() {
         // arrange
-        var loadBalancer = new LoadBalancer();
+        var loadBalancer = new LoadBalancer(randomStrategy);
         for (int i = 0; i < 10; i++) {
             loadBalancer.register("localhost:800" + i);
         }
@@ -41,7 +43,7 @@ public class LoadBalancerTest {
     void theSameAddressCannotBeRegisteredTwice() {
         // arrange
         String address = "localhost:8080";
-        var loadBalancer = new LoadBalancer();
+        var loadBalancer = new LoadBalancer(randomStrategy);
         loadBalancer.register(address);
 
         // act
@@ -57,7 +59,7 @@ public class LoadBalancerTest {
     void nullOrBlankMustBeRejected() {
         // arrange
         String blankAddress = "";
-        var loadBalancer = new LoadBalancer();
+        var loadBalancer = new LoadBalancer(randomStrategy);
 
         // act
         IllegalArgumentException nullAddressException = Assertions.assertThrows(IllegalArgumentException.class,
@@ -75,7 +77,7 @@ public class LoadBalancerTest {
     @Test
     void getShouldFailWithNoInstancesRegistered() {
         // arrange
-        var loadBalancer = new LoadBalancer();
+        var loadBalancer = new LoadBalancer(randomStrategy);
 
         // act
         IllegalStateException noInstancesRegisteredException = Assertions.assertThrows(IllegalStateException.class,
@@ -89,7 +91,7 @@ public class LoadBalancerTest {
     @Test
     void getShouldReturnOneRegisteredInstanceAtRandom() {
         // arrange
-        var loadBalancer = new LoadBalancer();
+        var loadBalancer = new LoadBalancer(randomStrategy);
         for (int i = 0; i < 10; i++) {
             loadBalancer.register("localhost:800" + i);
         }
