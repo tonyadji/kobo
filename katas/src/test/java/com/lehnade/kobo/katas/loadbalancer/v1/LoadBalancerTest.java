@@ -125,4 +125,21 @@ public class LoadBalancerTest {
         Assertions.assertEquals("localhost:8002", instance3);
         Assertions.assertEquals("localhost:8000", instance4);
     }
+
+    @Test
+    void shouldUnregisterAddress() {
+        // arrange
+        var loadBalancer = new LoadBalancer(randomStrategy);
+        for (int i = 0; i < 10; i++) {
+            loadBalancer.register("localhost:800" + i);
+        }
+        String address = "localhost:8005";
+
+        // act
+        loadBalancer.unregister(address);
+
+        // assert
+        Assertions.assertFalse(loadBalancer.getInstances().contains(address));
+        Assertions.assertEquals(9, loadBalancer.getInstances().size());
+    }
 }
