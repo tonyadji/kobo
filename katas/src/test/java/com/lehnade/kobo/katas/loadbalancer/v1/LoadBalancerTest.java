@@ -142,4 +142,18 @@ public class LoadBalancerTest {
         Assertions.assertFalse(loadBalancer.getInstances().contains(address));
         Assertions.assertEquals(9, loadBalancer.getInstances().size());
     }
+
+    @Test
+    void unregisterShouldFailWhenNoInstancesRegistered() {
+        // arrange
+        var loadBalancer = new LoadBalancer(randomStrategy);
+
+        // act
+        IllegalStateException noInstancesRegisteredException = Assertions.assertThrows(IllegalStateException.class,
+                () -> loadBalancer.unregister("some instance"));
+
+        // assert
+        Assertions.assertEquals("No instances registered", noInstancesRegisteredException.getMessage());
+        Assertions.assertEquals(0, loadBalancer.getInstances().size());
+    }
 }
