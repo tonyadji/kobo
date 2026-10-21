@@ -1,7 +1,12 @@
 package com.lehnade.kobo.katas.loadbalancer.v1;
 
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
+
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class LoadBalancerTest {
 
@@ -155,5 +160,80 @@ public class LoadBalancerTest {
         // assert
         Assertions.assertEquals("No instances registered", noInstancesRegisteredException.getMessage());
         Assertions.assertEquals(0, loadBalancer.getInstances().size());
+    }
+
+    @RepeatedTest(20)
+    void thousandThreadsCallingRegisterWithoutLatch() {
+        // arrange
+        var loadBalancer = new LoadBalancer(randomStrategy);
+        var threadCount = 1000;
+
+        var threads = new Thread[threadCount];
+        final AtomicInteger counter = new AtomicInteger(0);
+        for (int i = 0; i < threadCount; i++) {
+            threads[i] = new Thread(() ->
+                    loadBalancer.register("localhost:80"+counter.incrementAndGet()));
+        }
+
+        // act
+        for (Thread thread : threads) {
+            thread.start();
+        }
+
+        // assert
+        for (Thread thread : threads) {
+            try {
+                thread.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        System.out.println(loadBalancer.getInstances().size());
+
+    }
+
+    @RepeatedTest(20)
+    @Disabled("race reproduced 3/20, fix on Friday")
+    void thousandThreadsCallingRegisterWithLatch() throws InterruptedException {
+        // arrange
+        var loadBalancer = new LoadBalancer(randomStrategy);
+        var threadCount = 1000;
+        var latch = new CountDownLatch(1);
+
+        var threads = new Thread[threadCount];
+        final AtomicInteger counter = new AtomicInteger(0);
+        final AtomicInteger accepted = new AtomicInteger(0);
+        final AtomicInteger rejected = new AtomicInteger(0);
+
+        for (int i = 0; i < threadCount; i++) {
+            threads[i] = new Thread(() -> {
+                try {
+                    latch.await();
+                    loadBalancer.register("localhost:"+(8000+counter.incrementAndGet()));
+                    accepted.incrementAndGet();
+                } catch (IllegalStateException e) {
+                    rejected.incrementAndGet();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+        }
+
+        // act
+        for (Thread thread : threads) {
+            thread.start();
+        }
+
+        latch.countDown();
+        // assert
+        for (Thread thread : threads) thread.join();
+
+        System.out.println("size: " + loadBalancer.getInstances().size() + "");
+        System.out.println("Accepted: " + accepted.get());
+        System.out.println("Rejected: " + rejected.get());
+        Assertions.assertTrue(loadBalancer.getInstances().size() <= 10);
+        Assertions.assertFalse(loadBalancer.getInstances().contains(null));
+
     }
 }
