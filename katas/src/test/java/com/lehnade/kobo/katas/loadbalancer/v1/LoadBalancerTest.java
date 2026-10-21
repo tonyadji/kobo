@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 public class LoadBalancerTest {
 
     LoadBalancerStrategy randomStrategy = new RandomStrategy();
+    LoadBalancerStrategy roundRobinStrategy = new RoundRobinStrategy();
 
     @Test
     void shouldRegisterAndInstance() {
@@ -102,5 +103,26 @@ public class LoadBalancerTest {
         // assert
         Assertions.assertNotNull(instance);
         Assertions.assertTrue(loadBalancer.getInstances().contains(instance));
+    }
+
+    @Test
+    void shouldReturnConsecutiveInstancesWithRoundRobinStrategy() {
+        // arrange
+        var loadBalancer = new LoadBalancer(roundRobinStrategy);
+        for (int i = 0; i < 3; i++) {
+            loadBalancer.register("localhost:800" + i);
+        }
+
+        // act
+        String instance1 = loadBalancer.get();
+        String instance2 = loadBalancer.get();
+        String instance3 = loadBalancer.get();
+        String instance4 = loadBalancer.get();
+
+        // assert
+        Assertions.assertEquals("localhost:8000", instance1);
+        Assertions.assertEquals("localhost:8001", instance2);
+        Assertions.assertEquals("localhost:8002", instance3);
+        Assertions.assertEquals("localhost:8000", instance4);
     }
 }

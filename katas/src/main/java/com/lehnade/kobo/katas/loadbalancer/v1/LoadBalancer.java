@@ -2,7 +2,6 @@ package com.lehnade.kobo.katas.loadbalancer.v1;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Random;
 
 public class LoadBalancer {
 
