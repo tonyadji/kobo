@@ -1,10 +1,12 @@
 package com.lehnade.kobo.katas.ratelimiter.v1;
 
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 
 public class TokenBucketTest {
@@ -89,6 +91,34 @@ public class TokenBucketTest {
         // assert
         Assertions.assertFalse(tryWhenTokenIsEmpty);
         Assertions.assertEquals(10, accepted);
+    }
+
+    @RepeatedTest(20)
+    void thousandThreadsCallTryAcquireOnBucketWithCapacityOf100 () throws InterruptedException {
+        int numberOfThreads = 1000;
+        var tokenBucket = new TokenBucket(100, 1, new FakeClock());
+        var threads = new Thread[numberOfThreads];
+        var latch = new CountDownLatch(1);
+        var accepted = new AtomicInteger(0);
+
+        for (int i = 0; i < numberOfThreads; i++) {
+            Thread thread = new Thread(() -> {
+                try {
+                    latch.await();
+                    if (tokenBucket.tryAcquire()) accepted.incrementAndGet();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            threads[i] = thread;
+        }
+
+        for (Thread thread : threads) thread.start();
+
+        latch.countDown();
+        for (Thread thread : threads) thread.join();
+
+        Assertions.assertEquals(100, accepted.get());
     }
 
     static class FakeClock implements LongSupplier {

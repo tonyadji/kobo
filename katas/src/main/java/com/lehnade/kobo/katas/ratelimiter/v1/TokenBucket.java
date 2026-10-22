@@ -17,7 +17,7 @@ public class TokenBucket {
         this.lastRefillTime = clock.getAsLong();
     }
 
-    public boolean tryAcquire() {
+    public synchronized boolean tryAcquire() {
         refill();
         if (tokens >= 1) {
             tokens--;
