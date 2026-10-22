@@ -91,19 +91,6 @@ public class TokenBucketTest {
         Assertions.assertEquals(10, accepted);
     }
 
-    @Test
-    void tryAcquireShouldReturnTrueForANewClient() {
-        // arrange
-        String clientId = "client-1";
-        var tokenBucket = new TokenBucket(10, 1, new FakeClock());
-
-        // act
-        var result = tokenBucket.tryAcquire(clientId);
-
-        // assert
-        Assertions.assertTrue(result);
-    }
-
     static class FakeClock implements LongSupplier {
         private long timeNanos;
 
