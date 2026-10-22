@@ -30,5 +30,6 @@ public class TokenBucket {
         long currentTime = clock.getAsLong();
         double tokensToRefill = refillRate * (currentTime - lastRefillTime) / 1e9;
         tokens = Math.min(capacity, tokens + tokensToRefill);
+        lastRefillTime = currentTime;
     }
 }

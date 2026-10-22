@@ -53,6 +53,25 @@ public class TokenBucketTest {
         Assertions.assertEquals(10, accepted);
     }
 
+    @Test
+        // rate is 5/s so we need 200 ms to fill one token
+    void emptyBucketShouldRefillOneTokenAfter200ms () {
+        // arrange
+        FakeClock clock = new FakeClock();
+        var tokenBucket = new TokenBucket(10, 5, clock);
+        for (int i = 0; i < 10; i++) tokenBucket.tryAcquire();
+
+        // act
+        boolean tryWhenTokenIsEmpty = tokenBucket.tryAcquire();
+        clock.advanceTime(Duration.ofMillis(200));
+        int accepted = 0;
+        for (int i = 0; i < 10; i++) if(tokenBucket.tryAcquire()) accepted++;
+
+        // assert
+        Assertions.assertFalse(tryWhenTokenIsEmpty);
+        Assertions.assertEquals(1, accepted);
+    }
+
     static class FakeClock implements LongSupplier {
         private long timeNanos;
 
