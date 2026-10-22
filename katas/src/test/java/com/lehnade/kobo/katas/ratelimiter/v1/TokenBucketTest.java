@@ -20,6 +20,18 @@ public class TokenBucketTest {
         Assertions.assertTrue(result);
     }
 
+    @Test
+    void tryAcquireShouldReturnFalseIfBucketIsEmpty() {
+        // arrange
+        var tokenBucket = new TokenBucket(10, 1, new FakeClock());
+        for (int i = 0; i < 10; i++) tokenBucket.tryAcquire();
+
+        // act
+        var result = tokenBucket.tryAcquire();
+
+        // assert
+        Assertions.assertFalse(result);
+    }
 
     static class FakeClock implements LongSupplier {
         private long timeNanos;
