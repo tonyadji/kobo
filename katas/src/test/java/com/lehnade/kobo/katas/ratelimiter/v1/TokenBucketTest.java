@@ -1,6 +1,7 @@
 package com.lehnade.kobo.katas.ratelimiter.v1;
 
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -31,6 +32,25 @@ public class TokenBucketTest {
 
         // assert
         Assertions.assertFalse(result);
+    }
+
+    @Test
+    // rate is 5/s so we need 2 seconds to fill the bucket
+    void emptyBucketShouldRefillToCapacityAfterIdle() {
+        // arrange
+        FakeClock clock = new FakeClock();
+        var tokenBucket = new TokenBucket(10, 5, clock);
+        for (int i = 0; i < 10; i++) tokenBucket.tryAcquire();
+
+        // act
+        boolean tryWhenTokenIsEmpty = tokenBucket.tryAcquire();
+        clock.advanceTime(Duration.ofSeconds(2));
+        int accepted = 0;
+        for (int i = 0; i < 10; i++) if(tokenBucket.tryAcquire()) accepted++;
+
+        // assert
+        Assertions.assertFalse(tryWhenTokenIsEmpty);
+        Assertions.assertEquals(10, accepted);
     }
 
     static class FakeClock implements LongSupplier {

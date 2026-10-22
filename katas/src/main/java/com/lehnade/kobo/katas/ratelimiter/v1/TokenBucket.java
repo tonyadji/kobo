@@ -6,7 +6,7 @@ public class TokenBucket {
     private final int capacity;
     private final int refillRate;
     private final LongSupplier clock;
-    private long tokens;
+    private double tokens;
     private long lastRefillTime;
 
     public TokenBucket(int capacity, int refillRate, LongSupplier clock) {
@@ -18,10 +18,17 @@ public class TokenBucket {
     }
 
     public boolean tryAcquire() {
-        if (tokens > 0) {
+        refill();
+        if (tokens >= 1) {
             tokens--;
             return true;
         }
         return false;
+    }
+
+    private void refill() {
+        long currentTime = clock.getAsLong();
+        double tokensToRefill = refillRate * (currentTime - lastRefillTime) / 1e9;
+        tokens = Math.min(capacity, tokens + tokensToRefill);
     }
 }
