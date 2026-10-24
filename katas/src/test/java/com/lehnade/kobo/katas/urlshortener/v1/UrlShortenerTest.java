@@ -46,4 +46,16 @@ public class UrlShortenerTest {
                 () -> urlShortener.expand("1234567"));
         Assertions.assertEquals("Given code not found", exception.getMessage());
     }
+
+    @Test
+    void shortenShouldRejectInvalidUrl() {
+        // arrange
+        String invalidUrl = "httpswww.kobo.lehnade.com";
+        var urlShortener = new UrlShortener();
+
+        // act assert
+        IllegalArgumentException invalidUrlException = Assertions.assertThrows(IllegalArgumentException.class,
+                () -> urlShortener.shorten(invalidUrl));
+        Assertions.assertEquals("Invalid url", invalidUrlException.getMessage());
+    }
  }
