@@ -10,7 +10,7 @@ public class UrlShortenerTest {
     @Test
     void shortenShouldReturn7chars() {
         // arrange
-        String longUrl = "https://www.google.com";
+        String longUrl = "https://www.kobo.lehnade.com";
         var urlShortener = new UrlShortener();
 
         // act
@@ -19,4 +19,31 @@ public class UrlShortenerTest {
         // assert
         Assertions.assertEquals(7, shortUrl.length());
     }
-}
+
+    @Test
+    void expandShouldReturnLongUrl() {
+        // arrange
+        String longUrl = "https://www.kobo.lehnade.com";
+        var urlShortener = new UrlShortener();
+        String shortCode = urlShortener.shorten(longUrl);
+
+        // act
+        String longUrlFromShortCode = urlShortener.expand(shortCode);
+
+        // assert
+        Assertions.assertEquals(longUrl, longUrlFromShortCode);
+    }
+
+    @Test
+    void expandShouldThrowWhenCodeNotFound() {
+        // arrange
+        String longUrl = "https://www.kobo.lehnade.com";
+        var urlShortener = new UrlShortener();
+        String shortCode = urlShortener.shorten(longUrl);
+
+        // act assert
+        UrlNotFoundException exception = Assertions.assertThrows(UrlNotFoundException.class,
+                () -> urlShortener.expand("1234567"));
+        Assertions.assertEquals("Given code not found", exception.getMessage());
+    }
+ }

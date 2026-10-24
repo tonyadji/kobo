@@ -25,6 +25,13 @@ public class UrlShortener {
         return code;
     }
 
+    public String expand(String code) {
+        if (shortUrls.containsKey(code)) {
+            return shortUrls.get(code).longUrl();
+        }
+        throw new UrlNotFoundException("Given code not found");
+    }
+
     private String generateBase62Id(int length) {
         var code = new StringBuilder();
         for (int i = 0; i < length; i++) {
