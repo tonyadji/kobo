@@ -13,6 +13,9 @@ public class LoadBalancerV2 {
     }
 
     public void register(String address) {
+        if (address == null || address.isBlank()) {
+            throw new IllegalArgumentException("Address cannot be null or blank");
+        }
         if (instances.contains(address)) {
             throw new IllegalStateException("Instance already registered");
         }
