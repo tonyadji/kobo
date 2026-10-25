@@ -17,6 +17,8 @@ public class AtomicEngine implements TransferEngine {
 
     @Override
     public void transfer(int from, int to, long amount) {
+        validateAccount(from);
+        validateAccount(to);
         while (true) {
             long fromBalance = balances.get(from);
             if (fromBalance < amount) {
@@ -44,5 +46,9 @@ public class AtomicEngine implements TransferEngine {
     @Override
     public long casFailures() {
         return casFailures.longValue();
+    }
+
+    private void validateAccount(int account) {
+        if (account < 0 || account >= balances.length()) throw new IllegalArgumentException("Unknown account: "+account);
     }
 }
