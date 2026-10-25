@@ -11,21 +11,30 @@ public class UrlShortener {
     private static final Pattern VALID_URL_REGEX = Pattern.compile("^https?:\\/\\/(?:www\\.)?[-a-zA-Z0-9@:%._\\+~#=]{1,256}\\.[a-zA-Z0-9()]{1,6}\\b(?:[-a-zA-Z0-9()@:%_\\+.~#?&\\/=]*)$");
 
     private final ConcurrentHashMap<String, Urls> shortUrls;
+    private final ConcurrentHashMap<String, String> urlToCode;
     private final CodeGenerationStrategy strategy;
 
     public UrlShortener(CodeGenerationStrategy strategy) {
         this.shortUrls = new ConcurrentHashMap<>();
+        this.urlToCode = new ConcurrentHashMap<>();
         this.strategy = strategy;
     }
 
     public String shorten(String longUrl) {
         validateUrl(longUrl);
+        if (urlToCode.containsKey(longUrl)) {
+            return urlToCode.get(longUrl);
+        }
         String code = "";
         int i;
 
         for (i = 0; i < MAX_ATTEMPTS; i++) {
             code = strategy.generate(SHORT_URL_LENGTH);
-            if (shortUrls.putIfAbsent(code, new Urls(SHORT_URL_PREFIX.concat(code), longUrl)) == null) {
+            Urls urls = shortUrls.computeIfAbsent(code,k -> {
+                urlToCode.putIfAbsent(longUrl, k);
+                return new Urls(SHORT_URL_PREFIX+k, longUrl);
+            });
+            if (urls.longUrl().equals(longUrl)) {
                 break;
             }
         }

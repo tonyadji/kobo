@@ -60,7 +60,7 @@ public class UrlShortenerTest {
     @Test
     void twoDifferentUrlsNeverGetTheSameCode() {
         // arrange
-        String[] codes = {"the-code-1","the-code-1","the-code-2"};;
+        String[] codes = {"the-code-1","the-code-1","the-code-2"};
         var codeGenerator = new FakeCodeGenerator(codes);
         var urlShortener = new UrlShortener(codeGenerator);
         String longUrl1 = "https://www.kobo.lehnade.com";
@@ -111,6 +111,23 @@ public class UrlShortenerTest {
         Assertions.assertEquals(longUrl2, urlShortener.expand(shortCode2));
         Assertions.assertEquals(longUrl1, urlShortener.expand("the-code-1"));
         Assertions.assertEquals(6, codeGenerator.getCounter());
+    }
+
+    @Test
+    void shorteningTheSameUrlTwiceShouldReturnTheSameCode() {
+        // arrange
+        String[] codes = {"the-code-1","the-code-2","the-code-3","the-code-4","the-code-5","the-code-6"};;
+        var codeGenerator = new FakeCodeGenerator(codes);
+        var urlShortener = new UrlShortener(codeGenerator);
+        String longUrl = "https://www.kobo.lehnade.com";
+        String shortCode1 = urlShortener.shorten(longUrl);
+
+        // act
+        String shortCode2 = urlShortener.shorten(longUrl);
+
+        // assert
+        Assertions.assertEquals(shortCode1, shortCode2);
+        Assertions.assertEquals(1, codeGenerator.getCounter());
     }
 
     static class FakeCodeGenerator implements CodeGenerationStrategy {
