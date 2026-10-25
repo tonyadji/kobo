@@ -22,27 +22,20 @@ public class UrlShortener {
 
     public String shorten(String longUrl) {
         validateUrl(longUrl);
-        if (urlToCode.containsKey(longUrl)) {
-            return urlToCode.get(longUrl);
-        }
-        String code = "";
-        int i;
 
-        for (i = 0; i < MAX_ATTEMPTS; i++) {
-            code = strategy.generate(SHORT_URL_LENGTH);
-            Urls urls = shortUrls.computeIfAbsent(code,k -> {
-                urlToCode.putIfAbsent(longUrl, k);
-                return new Urls(SHORT_URL_PREFIX+k, longUrl);
-            });
-            if (urls.longUrl().equals(longUrl)) {
-                break;
+        String shortCode = urlToCode.computeIfAbsent(longUrl, k -> {
+            String code = "";
+            int i;
+            for (i = 0; i < MAX_ATTEMPTS; i++) {
+                code = strategy.generate(SHORT_URL_LENGTH);
+                if(shortUrls.putIfAbsent(code, new Urls(SHORT_URL_PREFIX+code, longUrl)) == null) break;
             }
-        }
-        if (i == MAX_ATTEMPTS) {
-            throw new IllegalStateException("Could not generate unique code after "+MAX_ATTEMPTS+" attempts.");
-        }
-
-        return code;
+            if (i == MAX_ATTEMPTS) {
+                throw new IllegalStateException("Could not generate unique code after "+MAX_ATTEMPTS+" attempts.");
+            }
+            return code;
+        });
+        return shortCode;
     }
 
     public String expand(String code) {
