@@ -34,4 +34,19 @@ public class LoadBalancerTest {
         Assertions.assertEquals("Maximum number of instances reached", tooMuchInstances.getMessage());
         Assertions.assertEquals(10, loadBalancer.getInstancesList().size());
     }
+
+    @Test
+    void theSameAddressCannotBeRegisteredTwice() {
+        // arrange
+        String address = "localhost:8080";
+        var loadBalancer = new LoadBalancerV2();
+        loadBalancer.register(address);
+
+        // act
+        IllegalStateException alreadyRegistered = Assertions.assertThrows(IllegalStateException.class,
+                () -> loadBalancer.register(address));
+
+        Assertions.assertEquals("Instance already registered", alreadyRegistered.getMessage());
+        Assertions.assertEquals(1, loadBalancer.getInstancesList().size());
+    }
 }

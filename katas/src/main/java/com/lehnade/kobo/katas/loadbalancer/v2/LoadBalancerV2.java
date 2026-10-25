@@ -13,6 +13,9 @@ public class LoadBalancerV2 {
     }
 
     public void register(String address) {
+        if (instances.contains(address)) {
+            throw new IllegalStateException("Instance already registered");
+        }
         if (instances.size() >= MAXIMUM_INSTANCES) {
             throw new IllegalStateException("Maximum number of instances reached");
         }
