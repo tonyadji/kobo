@@ -13,6 +13,7 @@ public class TokenBucketV2 {
         this.capacity = capacity;
         this.refillRate = refillRate;
         this.clock = clock;
+        this.lastRefillTime = clock.getAsLong();
         this.tokens = capacity;
     }
 
@@ -29,7 +30,7 @@ public class TokenBucketV2 {
     private void refill() {
         long now = clock.getAsLong();
         double tokensToAdd = (now - lastRefillTime) * refillRate / 1e9;
-        tokens = Math.min(capacity, tokensToAdd);
+        tokens = Math.min(capacity, tokens + tokensToAdd);
         lastRefillTime = now;
     }
 }

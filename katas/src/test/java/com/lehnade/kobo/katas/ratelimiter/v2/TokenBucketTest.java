@@ -11,7 +11,7 @@ public class TokenBucketTest {
     @Test
     void tryAcquireReturnsFalseIfRequestNotAllowed() {
         // arrange
-        var tokenBucket = new TokenBucketV2(10, 5, new FakeClock());
+        var tokenBucket = new TokenBucketV2(1, 5, new FakeClock());
         tokenBucket.tryAcquire();
 
         // act
@@ -90,6 +90,46 @@ public class TokenBucketTest {
         // assert
         Assertions.assertFalse(requestNotAllowed);
         Assertions.assertEquals(10, consumedTokens);
+    }
+
+    @Test
+    void emptyBucketShouldRefill1TokenAfter200Ms() {
+        // arrange
+        var clock = new FakeClock();
+        var tokenBucket = new TokenBucketV2(10, 5, clock);
+        for (int i = 0; i < 10; i++) {
+            tokenBucket.tryAcquire();
+        }
+        clock.advanceTime(Duration.ofMillis(200));
+
+        // act
+        var clientAllowed = tokenBucket.tryAcquire();
+        var clientNotAllowed = tokenBucket.tryAcquire();
+
+        // assert
+        Assertions.assertTrue(clientAllowed);
+        Assertions.assertFalse(clientNotAllowed);
+    }
+
+    @Test
+    void bucketWithTwoTokensShouldRefill5TokensAfter1s() {
+        // arrange
+        var clock = new FakeClock();
+        var tokenBucket = new TokenBucketV2(10, 5, clock);
+        for (int i = 0; i < 8; i++) {
+            tokenBucket.tryAcquire();
+        }
+        clock.advanceTime(Duration.ofMillis(1000));
+        var consumedTokens = 0;
+        // act
+        for (int i = 0; i < 10; i++) {
+            if (tokenBucket.tryAcquire()) consumedTokens++; else break;
+        }
+        var clientNotAllowed = tokenBucket.tryAcquire();
+
+        // assert
+        Assertions.assertEquals(7, consumedTokens);
+        Assertions.assertFalse(clientNotAllowed);
     }
 
     static class FakeClock implements LongSupplier {
