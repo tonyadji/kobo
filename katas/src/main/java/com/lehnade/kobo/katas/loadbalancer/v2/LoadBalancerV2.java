@@ -5,6 +5,7 @@ import java.util.List;
 
 public class LoadBalancerV2 {
 
+    private static final int MAXIMUM_INSTANCES = 10;
     private final List<String> instances;
 
     public LoadBalancerV2() {
@@ -12,6 +13,9 @@ public class LoadBalancerV2 {
     }
 
     public void register(String address) {
+        if (instances.size() >= MAXIMUM_INSTANCES) {
+            throw new IllegalStateException("Maximum number of instances reached");
+        }
         instances.add(address);
     }
 

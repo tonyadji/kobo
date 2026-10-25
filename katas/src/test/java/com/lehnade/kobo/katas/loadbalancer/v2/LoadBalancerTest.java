@@ -18,4 +18,20 @@ public class LoadBalancerTest {
         Assertions.assertTrue(loadBalancer.getInstancesList().contains(address));
         Assertions.assertEquals(1, loadBalancer.getInstancesList().size());
     }
+
+    @Test
+    void atMost10InstancesCanBeRegistered() {
+        // arrange
+        var loadBalancer = new LoadBalancerV2();
+        for (int i = 0; i < 10; i++) {
+            loadBalancer.register("localhost:" + (8000+i));
+        }
+
+        // act & assert
+        IllegalStateException tooMuchInstances = Assertions.assertThrows(IllegalStateException.class,
+                () -> loadBalancer.register("localhost:8091"));
+
+        Assertions.assertEquals("Maximum number of instances reached", tooMuchInstances.getMessage());
+        Assertions.assertEquals(10, loadBalancer.getInstancesList().size());
+    }
 }
