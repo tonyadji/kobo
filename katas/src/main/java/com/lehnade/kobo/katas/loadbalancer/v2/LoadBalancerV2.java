@@ -37,4 +37,8 @@ public class LoadBalancerV2 {
         }
         return strategy.get(instances);
     }
+
+    public boolean unregister(String address) {
+        return instances.remove(address);
+    }
 }

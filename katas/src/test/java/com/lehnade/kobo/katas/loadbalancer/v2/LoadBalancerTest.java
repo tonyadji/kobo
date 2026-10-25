@@ -3,7 +3,7 @@ package com.lehnade.kobo.katas.loadbalancer.v2;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
+import java.util.function.IntUnaryOperator;
 
 public class LoadBalancerTest {
 
@@ -11,7 +11,7 @@ public class LoadBalancerTest {
     void registerShouldRegisterInstance() {
         // arrange
         String address = "localhost:8080";
-        var loadBalancer = new LoadBalancerV2(new FakeRandomStrategy());
+        var loadBalancer = new LoadBalancerV2(new RandomStrategy());
 
         // act
         loadBalancer.register(address);
@@ -24,7 +24,7 @@ public class LoadBalancerTest {
     @Test
     void atMost10InstancesCanBeRegistered() {
         // arrange
-        var loadBalancer = new LoadBalancerV2(new FakeRandomStrategy());
+        var loadBalancer = new LoadBalancerV2(new RandomStrategy());
         for (int i = 0; i < 10; i++) {
             loadBalancer.register("localhost:" + (8000+i));
         }
@@ -41,7 +41,7 @@ public class LoadBalancerTest {
     void theSameAddressCannotBeRegisteredTwice() {
         // arrange
         String address = "localhost:8080";
-        var loadBalancer = new LoadBalancerV2(new FakeRandomStrategy());
+        var loadBalancer = new LoadBalancerV2(new RandomStrategy());
         loadBalancer.register(address);
 
         // act
@@ -57,7 +57,7 @@ public class LoadBalancerTest {
         // arrange
         String blankAddress = "";
         String nullAddress = null;
-        var loadBalancer = new LoadBalancerV2(new FakeRandomStrategy());
+        var loadBalancer = new LoadBalancerV2(new RandomStrategy());
 
         // act & assert
         IllegalArgumentException blankAddressException = Assertions.assertThrows(IllegalArgumentException.class,
@@ -73,7 +73,7 @@ public class LoadBalancerTest {
     @Test
     void getFailsClearlyWithNoRegisteredInstances() {
         // arrange
-        var loadBalancer = new LoadBalancerV2(new FakeRandomStrategy());
+        var loadBalancer = new LoadBalancerV2(new RandomStrategy());
 
         // act
         IllegalStateException noInstancesRegisteredException = Assertions.assertThrows(IllegalStateException.class,
@@ -86,20 +86,22 @@ public class LoadBalancerTest {
     @Test
     void getShouldReturnOneRegisteredInstanceAtRandom() {
         // arrange
-        var randomStrategy = new FakeRandomStrategy();
+        final int[] nextValueToReturn = new int[1];
+        IntUnaryOperator bound = (int i) -> nextValueToReturn[0];
+        var randomStrategy = new RandomStrategy(bound);
         var loadBalancer = new LoadBalancerV2(randomStrategy);
         for (int i = 0; i < 10; i++) {
             loadBalancer.register("localhost:" + (8000+i));
         }
         
         // act
-        randomStrategy.setIndex(4);
+        nextValueToReturn[0] = 4;
         String the5thInstance = loadBalancer.get();
 
-        randomStrategy.setIndex(1);
+        nextValueToReturn[0] = 1;
         String the2ndInstance = loadBalancer.get();
 
-        randomStrategy.setIndex(9);
+        nextValueToReturn[0] = 9;
         String then10thInstance = loadBalancer.get();
         
         // assert
@@ -128,17 +130,35 @@ public class LoadBalancerTest {
         Assertions.assertEquals("localhost:8002", the3rdInstance);
         Assertions.assertEquals("localhost:8000", the4thInstance);
     }
-    
-    static class FakeRandomStrategy implements LoadBalancerStrategy {
-        private int index = 0;
-        
-        @Override
-        public String get(List<String> instances) {
-            return instances.get(index);
-        }
-        
-        public void setIndex(int index) {
-            this.index = index;
-        }
+
+    @Test
+    void unregisterShouldUnregisterInstance() {
+        // arrange
+        var loadBalancer = new LoadBalancerV2(new RandomStrategy());
+        String address = "localhost:8080";
+        String address2 = "localhost:8082";
+        loadBalancer.register(address);
+        loadBalancer.register(address2);
+
+        // act
+        boolean unregistered = loadBalancer.unregister(address);
+
+        // assert
+        Assertions.assertTrue(unregistered);
+        Assertions.assertFalse(loadBalancer.getInstancesList().contains(address));
+        Assertions.assertEquals(1, loadBalancer.getInstancesList().size());
     }
+
+    @Test
+    void unregisterShouldReturnFalseWhenCallWithNoInstances() {
+        // arrange
+        var loadBalancer = new LoadBalancerV2(new RandomStrategy());
+
+        // act
+        boolean unregistered = loadBalancer.unregister("localhost:8080");
+
+        // assert
+        Assertions.assertFalse(unregistered);
+    }
+
 }
