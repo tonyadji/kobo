@@ -1,11 +1,14 @@
 package com.lehnade.kobo.katas.ratelimiter.v2;
 
 public class TokenBucketV2 {
-
+    private final int capacity;
+    private final int refillRate;
     private int tokens;
 
-    public TokenBucketV2() {
-        this.tokens = 1;
+    public TokenBucketV2(int capacity, int refillRate) {
+        this.capacity = capacity;
+        this.refillRate = refillRate;
+        this.tokens = capacity;
     }
 
 
