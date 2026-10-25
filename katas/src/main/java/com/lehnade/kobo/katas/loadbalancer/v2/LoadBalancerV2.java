@@ -7,8 +7,10 @@ public class LoadBalancerV2 {
 
     private static final int MAXIMUM_INSTANCES = 10;
     private final List<String> instances;
+    private final LoadBalancerStrategy strategy;
 
-    public LoadBalancerV2() {
+    public LoadBalancerV2(LoadBalancerStrategy strategy) {
+        this.strategy = strategy;
         instances = new ArrayList<>();
     }
 
@@ -27,5 +29,12 @@ public class LoadBalancerV2 {
 
     public List<String> getInstancesList() {
         return List.copyOf(instances);
+    }
+
+    public String get() {
+        if (instances.isEmpty()) {
+            throw new IllegalStateException("No instances registered");
+        }
+        return strategy.get(instances);
     }
 }
