@@ -1,8 +1,12 @@
 package com.lehnade.kobo.katas.loadbalancer.v2;
 
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntUnaryOperator;
 
 public class LoadBalancerTest {
@@ -159,6 +163,43 @@ public class LoadBalancerTest {
 
         // assert
         Assertions.assertFalse(unregistered);
+    }
+
+    @RepeatedTest(10)
+    void thousandThreadShouldCallRegisterAndOnlyTenSucceed() throws InterruptedException {
+        // arrange
+        var loadBalancer = new LoadBalancerV2(new RandomStrategy());
+        var threadCount = 1000;
+        var threads = new Thread[threadCount];
+        var success = new AtomicInteger(0);
+        var counter = new AtomicInteger(0);
+        var latch = new CountDownLatch(1);
+        var errors = new ConcurrentLinkedQueue<String>();
+
+        for (int i = 0; i < threadCount; i++) {
+
+            threads[i] = new Thread(() -> {
+                try {
+                    latch.await();
+                    loadBalancer.register("localhost:"+(8000+counter.incrementAndGet()));
+                    success.incrementAndGet();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                } catch (Exception e) {
+                    errors.add(e.getMessage());
+                }
+            });
+        }
+
+        // act
+        for (Thread thread : threads) thread.start();
+        latch.countDown();
+        for (Thread thread : threads) thread.join();
+
+        // assert
+        Assertions.assertEquals(10, loadBalancer.getInstancesList().size());
+        Assertions.assertEquals(10, success.get());
+        Assertions.assertEquals(990, errors.size());
     }
 
 }
