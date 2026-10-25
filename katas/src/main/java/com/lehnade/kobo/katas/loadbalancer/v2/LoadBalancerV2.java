@@ -6,7 +6,7 @@ import java.util.List;
 public class LoadBalancerV2 {
 
     private static final int MAXIMUM_INSTANCES = 10;
-    private final List<String> instances;
+    private volatile List<String> instances;
     private final LoadBalancerStrategy strategy;
 
     public LoadBalancerV2(LoadBalancerStrategy strategy) {
@@ -14,7 +14,7 @@ public class LoadBalancerV2 {
         instances = new ArrayList<>();
     }
 
-    public void register(String address) {
+    public synchronized void register(String address) {
         if (address == null || address.isBlank()) {
             throw new IllegalArgumentException("Address cannot be null or blank");
         }
@@ -24,7 +24,9 @@ public class LoadBalancerV2 {
         if (instances.size() >= MAXIMUM_INSTANCES) {
             throw new IllegalStateException("Maximum number of instances reached");
         }
-        instances.add(address);
+        var copy = new ArrayList<>(instances);
+        copy.add(address);
+        instances = List.copyOf(copy);
     }
 
     public List<String> getInstancesList() {
@@ -32,13 +34,17 @@ public class LoadBalancerV2 {
     }
 
     public String get() {
-        if (instances.isEmpty()) {
+        var snapshot = instances;
+        if (snapshot.isEmpty()) {
             throw new IllegalStateException("No instances registered");
         }
-        return strategy.get(instances);
+        return strategy.get(snapshot);
     }
 
-    public boolean unregister(String address) {
-        return instances.remove(address);
+    public synchronized boolean unregister(String address) {
+        var copy = new ArrayList<>(instances);
+        boolean result = copy.remove(address);
+        instances = List.copyOf(copy);
+        return result;
     }
 }
