@@ -107,6 +107,27 @@ public class LoadBalancerTest {
         Assertions.assertEquals("localhost:8001", the2ndInstance);
         Assertions.assertEquals("localhost:8009", then10thInstance);
     }
+
+    @Test
+    void getShouldReturnAdjacentInstancesWithRoundRobinStrategy() {
+        // arrange
+        var loadBalancer = new LoadBalancerV2(new RoundRobinStrategy());
+        for (int i = 0; i < 3; i++) {
+            loadBalancer.register("localhost:" + (8000+i));
+        }
+
+        // act
+        String the1stInstance = loadBalancer.get();
+        String the2ndInstance = loadBalancer.get();
+        String the3rdInstance = loadBalancer.get();
+        String the4thInstance = loadBalancer.get();
+
+        // assert
+        Assertions.assertEquals("localhost:8000", the1stInstance);
+        Assertions.assertEquals("localhost:8001", the2ndInstance);
+        Assertions.assertEquals("localhost:8002", the3rdInstance);
+        Assertions.assertEquals("localhost:8000", the4thInstance);
+    }
     
     static class FakeRandomStrategy implements LoadBalancerStrategy {
         private int index = 0;
