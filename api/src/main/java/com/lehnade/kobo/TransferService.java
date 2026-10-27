@@ -17,6 +17,7 @@ public class TransferService {
     }
 
     public void transfer(long from, long to, long amount) {
+        if (getBalance(from) < amount) { throw new UnsufficientFundException("Unsufficient balance") ; }
         debit(from, amount);
         credit(to, amount);
     }
@@ -33,5 +34,11 @@ public class TransferService {
                 .set(BALANCE_MINOR, BALANCE_MINOR.plus(amount))
                 .where(ID.eq(to))
                 .execute();
+    }
+
+    private long getBalance(long id) {
+        return ctx.select(BALANCE_MINOR).from(ACCOUNTS)
+                .where(ID.eq(id))
+                .fetchOne(BALANCE_MINOR);
     }
 }

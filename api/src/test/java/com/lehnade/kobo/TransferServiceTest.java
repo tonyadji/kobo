@@ -55,6 +55,34 @@ public class TransferServiceTest {
 
     }
 
+    @Test
+    void unsufficientBalanceIsRefused() {
+        // arrange
+        long from = 2L;
+        long to = 3L;
+        long amount = 300L;
+        insertAccountsWithBalance(from, 200L);
+        insertAccountsWithBalance(to, 150L);
+        long balanceFromBefore = getBalance(from);
+        long balanceToBefore = getBalance(to);
+        long totalBalanceBefore = balanceFromBefore + balanceToBefore;
+
+        // act
+        TransferService transferService = new TransferService(dsl);
+        UnsufficientFundException exception = Assertions.assertThrows(UnsufficientFundException.class,
+                () -> transferService.transfer(from, to, amount));
+
+        // assert
+        long balanceFromAfter = getBalance(from);
+        long balanceToAfter = getBalance(to);
+        long totalBalanceAfter = balanceFromAfter + balanceToAfter;
+
+        Assertions.assertEquals("Unsufficient balance", exception.getMessage());
+        Assertions.assertEquals(totalBalanceBefore, totalBalanceAfter);
+        Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
+        Assertions.assertEquals(balanceToBefore, balanceToAfter);
+    }
+
     private void insertAccountsWithBalance(long from, long balance) {
         dsl.insertInto(ACCOUNTS, ID, BALANCE_MINOR)
                 .values(from, balance)
