@@ -111,6 +111,31 @@ public class TransferServiceTest {
         Assertions.assertEquals(balanceToBefore, balanceToAfter);
     }
 
+    @Test
+    void selfTransferIsRefused() {
+        // arrange
+        long from = 2L;
+        long to = 3L;
+        long amount = 0;
+        insertAccountsWithBalance(from, 200L);
+        insertAccountsWithBalance(to, 150L);
+        long balanceFromBefore = getBalance(from);
+        long totalBalanceBefore = balanceFromBefore;
+
+        // act
+        TransferService transferService = new TransferService(dsl);
+        InvalidTransferException exception = Assertions.assertThrows(InvalidTransferException.class,
+                () -> transferService.transfer(from, from, amount));
+
+        // assert
+        long balanceFromAfter = getBalance(from);
+        long totalBalanceAfter = balanceFromAfter;
+
+        Assertions.assertEquals("Self transfer is not allowed", exception.getMessage());
+        Assertions.assertEquals(totalBalanceBefore, totalBalanceAfter);
+        Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
+    }
+
     private void insertAccountsWithBalance(long from, long balance) {
         dsl.insertInto(ACCOUNTS, ID, BALANCE_MINOR)
                 .values(from, balance)

@@ -17,6 +17,7 @@ public class TransferService {
     }
 
     public void transfer(long from, long to, long amount) {
+        if (from == to) { throw new InvalidTransferException("Self transfer is not allowed") ; }
         if (amount <= 0) { throw new InvalidTransferException("Amount should be greater than 0") ; }
         if (getBalance(from) < amount) { throw new UnsufficientFundException("Unsufficient balance") ; }
         debit(from, amount);
