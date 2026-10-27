@@ -17,39 +17,45 @@ public class TransferService {
     }
 
     public void transfer(long from, long to, long amount) {
-        validateAccount(from);
-        validateAccount(to);
         if (from == to) { throw new InvalidTransferException("Self transfer is not allowed") ; }
         if (amount <= 0) { throw new InvalidTransferException("Amount should be greater than 0") ; }
-        if (getBalance(from) < amount) { throw new UnsufficientFundException("Unsufficient balance") ; }
-        debit(from, amount);
-        credit(to, amount);
+
+        ctx.transaction(configuration -> {
+            var txCtx = DSL.using(configuration);
+            if (from < to) {
+                debit(from, amount, txCtx);
+                credit(to, amount, txCtx);
+            } else {
+                credit(to, amount, txCtx);
+                debit(from, amount, txCtx);
+            }
+        });
     }
 
-    private void validateAccount(long account) {
-        Long retrievedId = ctx.select(ID).from(ACCOUNTS)
-                .where(ID.eq(account))
-                .fetchOne(ID);
-        if (retrievedId == null) throw new InvalidTransferException("Unknown account "+account);
+    private void requireAccountExists(long account, DSLContext ctx) {
+        boolean accountExists = ctx.fetchExists(
+                     ctx.selectOne().from(ACCOUNTS).where(ID.eq(account)));
+
+        if (!accountExists) throw new UnknownAccountException("Unknown account "+account);
     }
 
-    private void debit(long from, long amount) {
-        ctx.update(ACCOUNTS)
+    private void debit(long from, long amount, DSLContext ctx) {
+        int updatedRow = ctx.update(ACCOUNTS)
                 .set(BALANCE_MINOR, BALANCE_MINOR.minus(amount))
                 .where(ID.eq(from))
+                .and(BALANCE_MINOR.ge(amount))
                 .execute();
+        if (updatedRow == 0) {
+            requireAccountExists(from, ctx);
+            throw new InsufficientFundException("Unsufficient balance");
+        }
     }
 
-    private void credit(long to, long amount) {
-        ctx.update(ACCOUNTS)
+    private void credit(long to, long amount, DSLContext ctx) {
+        int updatedRow =  ctx.update(ACCOUNTS)
                 .set(BALANCE_MINOR, BALANCE_MINOR.plus(amount))
                 .where(ID.eq(to))
                 .execute();
-    }
-
-    private long getBalance(long id) {
-        return ctx.select(BALANCE_MINOR).from(ACCOUNTS)
-                .where(ID.eq(id))
-                .fetchOne(BALANCE_MINOR);
+        if (updatedRow == 0) { throw new UnknownAccountException("Unknown account "+to); }
     }
 }

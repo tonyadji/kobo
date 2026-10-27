@@ -69,7 +69,7 @@ public class TransferServiceTest {
 
         // act
         TransferService transferService = new TransferService(dsl);
-        UnsufficientFundException exception = Assertions.assertThrows(UnsufficientFundException.class,
+        InsufficientFundException exception = Assertions.assertThrows(InsufficientFundException.class,
                 () -> transferService.transfer(from, to, amount));
 
         // assert
@@ -116,7 +116,7 @@ public class TransferServiceTest {
         // arrange
         long from = 2L;
         long to = 3L;
-        long amount = 0;
+        long amount = 20;
         insertAccountsWithBalance(from, 200L);
         insertAccountsWithBalance(to, 150L);
         long balanceFromBefore = getBalance(from);
@@ -137,7 +137,7 @@ public class TransferServiceTest {
     }
 
     @Test
-    void unknownAccountIsRefused() {
+    void unknownToAccountIsRefused() {
         // arrange
         long from = 2L;
         long to = 3L;
@@ -148,7 +148,7 @@ public class TransferServiceTest {
 
         // act
         TransferService transferService = new TransferService(dsl);
-        InvalidTransferException exception = Assertions.assertThrows(InvalidTransferException.class,
+        UnknownAccountException exception = Assertions.assertThrows(UnknownAccountException.class,
                 () -> transferService.transfer(from, to, amount));
 
         // assert
@@ -157,6 +157,23 @@ public class TransferServiceTest {
         Assertions.assertEquals("Unknown account " + to, exception.getMessage());
         Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
     }
+
+    @Test
+    void unknownFromAccountIsRefused() {
+        // arrange
+        long from = 2L;
+        long to = 3L;
+        long amount = 10;
+
+        // act
+        TransferService transferService = new TransferService(dsl);
+        UnknownAccountException exception = Assertions.assertThrows(UnknownAccountException.class,
+                () -> transferService.transfer(from, to, amount));
+
+        // assert
+        Assertions.assertEquals("Unknown account " + from, exception.getMessage());
+    }
+
 
     private void insertAccountsWithBalance(long from, long balance) {
         dsl.insertInto(ACCOUNTS, ID, BALANCE_MINOR)
