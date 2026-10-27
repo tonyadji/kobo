@@ -17,11 +17,20 @@ public class TransferService {
     }
 
     public void transfer(long from, long to, long amount) {
+        validateAccount(from);
+        validateAccount(to);
         if (from == to) { throw new InvalidTransferException("Self transfer is not allowed") ; }
         if (amount <= 0) { throw new InvalidTransferException("Amount should be greater than 0") ; }
         if (getBalance(from) < amount) { throw new UnsufficientFundException("Unsufficient balance") ; }
         debit(from, amount);
         credit(to, amount);
+    }
+
+    private void validateAccount(long account) {
+        Long retrievedId = ctx.select(ID).from(ACCOUNTS)
+                .where(ID.eq(account))
+                .fetchOne(ID);
+        if (retrievedId == null) throw new InvalidTransferException("Unknown account "+account);
     }
 
     private void debit(long from, long amount) {

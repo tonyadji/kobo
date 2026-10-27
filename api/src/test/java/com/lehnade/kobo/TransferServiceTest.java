@@ -136,6 +136,28 @@ public class TransferServiceTest {
         Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
     }
 
+    @Test
+    void unknownAccountIsRefused() {
+        // arrange
+        long from = 2L;
+        long to = 3L;
+        long amount = 10;
+        insertAccountsWithBalance(from, 200L);
+
+        long balanceFromBefore = getBalance(from);
+
+        // act
+        TransferService transferService = new TransferService(dsl);
+        InvalidTransferException exception = Assertions.assertThrows(InvalidTransferException.class,
+                () -> transferService.transfer(from, to, amount));
+
+        // assert
+        long balanceFromAfter = getBalance(from);
+
+        Assertions.assertEquals("Unknown account " + to, exception.getMessage());
+        Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
+    }
+
     private void insertAccountsWithBalance(long from, long balance) {
         dsl.insertInto(ACCOUNTS, ID, BALANCE_MINOR)
                 .values(from, balance)
