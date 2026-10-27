@@ -10,3 +10,6 @@
 target/
 *.class
 results.txt
+
+# jqwik
+.jqwik-database
