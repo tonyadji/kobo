@@ -8,19 +8,23 @@ import org.jooq.impl.DSL;
 public class TransferService {
 
     private static final Table<?> ACCOUNTS = DSL.table("accounts");
+    private static final Table<?> TRANSFERS = DSL.table("transfers");
     private static final Field<Long> ID = DSL.field("id", Long.class);
     private static final Field<Long> BALANCE_MINOR = DSL.field("balance_minor", Long.class);
+    private static final Field<Long> AMOUNT_MINOR = DSL.field("amount_minor", Long.class);
+    private static final Field<Long> FROM_ACCOUNT = DSL.field("from_account_id", Long.class);
+    private static final Field<Long> TO_ACCOUNT = DSL.field("to_account_id", Long.class);
     private final DSLContext ctx;
 
     public TransferService(DSLContext ctx) {
         this.ctx = ctx;
     }
 
-    public void transfer(long from, long to, long amount) {
+    public long transfer(long from, long to, long amount) {
         if (from == to) { throw new InvalidTransferException("Self transfer is not allowed") ; }
         if (amount <= 0) { throw new InvalidTransferException("Amount should be greater than 0") ; }
 
-        ctx.transaction(configuration -> {
+        long transferId = ctx.transactionResult(configuration -> {
             var txCtx = DSL.using(configuration);
             if (from < to) {
                 debit(from, amount, txCtx);
@@ -29,7 +33,10 @@ public class TransferService {
                 credit(to, amount, txCtx);
                 debit(from, amount, txCtx);
             }
+
+            return transfer(from, to, amount, txCtx);
         });
+        return transferId;
     }
 
     private void requireAccountExists(long account, DSLContext ctx) {
@@ -57,5 +64,12 @@ public class TransferService {
                 .where(ID.eq(to))
                 .execute();
         if (updatedRow == 0) { throw new UnknownAccountException("Unknown account "+to); }
+    }
+
+    private long transfer(long from, long to, long amount, DSLContext ctx) {
+        return ctx.insertInto(TRANSFERS, FROM_ACCOUNT, TO_ACCOUNT, AMOUNT_MINOR)
+                .values(from, to, amount)
+                .returning(ID)
+                .fetchOne(ID);
     }
 }

@@ -1,6 +1,7 @@
 package com.lehnade.kobo;
 
 import org.flywaydb.core.Flyway;
+import org.jooq.DSLContext;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 final class Postgres {
@@ -10,5 +11,9 @@ final class Postgres {
         Flyway.configure()
                 .dataSource(CONTAINER.getJdbcUrl(), CONTAINER.getUsername(), CONTAINER.getPassword())
                 .load().migrate();
+    }
+
+    static void reset(DSLContext dsl) {
+        dsl.execute("TRUNCATE transfers, accounts RESTART IDENTITY");
     }
 }

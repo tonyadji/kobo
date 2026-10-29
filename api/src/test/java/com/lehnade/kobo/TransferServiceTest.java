@@ -25,7 +25,7 @@ public class TransferServiceTest {
 
     @BeforeEach
     void cleanDatabase() {
-        dsl.truncate(ACCOUNTS).execute();
+        Postgres.reset(dsl);
     }
 
     @Test
