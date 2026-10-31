@@ -11,7 +11,7 @@ public class TransferController {
     }
 
     public void transfer(Context ctx) {
-        var requestDto =  ctx.bodyAsClass(TransferRequestDto.class);
+        var requestDto =  ctx.bodyValidator(TransferRequestDto.class).get();
         var transferId = transferService.transfer(requestDto.from(), requestDto.to(), requestDto.amount());
         ctx.status(201).json(new TransferResponseDto(transferId));
     }
