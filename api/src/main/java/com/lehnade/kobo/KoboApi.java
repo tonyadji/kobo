@@ -2,13 +2,13 @@ package com.lehnade.kobo;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import io.javalin.Javalin;
 import io.javalin.json.JavalinJackson;
 import org.jooq.DSLContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static io.javalin.apibuilder.ApiBuilder.get;
 import static io.javalin.apibuilder.ApiBuilder.post;
 
 public class KoboApi {
@@ -18,17 +18,21 @@ public class KoboApi {
     public static Javalin create(DSLContext dsl) {
 
         TransferController transferController = new TransferController(new TransferService(dsl));
+        AccountController accountController = new AccountController(new AccountService(dsl));
+
         ObjectMapper mapper = new ObjectMapper();
         mapper.enable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES);
         mapper.disable(DeserializationFeature.ACCEPT_FLOAT_AS_INT);
         Javalin app = Javalin.create(
                 config -> {
                     config.jsonMapper(new JavalinJackson(mapper, false));
-                    config.router.apiBuilder(() ->
-                            post("transfers",transferController::transfer)
+                    config.router.apiBuilder(
+                            () -> {
+                                post("/transfers", transferController::transfer);
+                                get("/accounts/{id}", accountController::get);
+                            }
                     );
                 }
-
 
         );
         app.exception(InvalidTransferException.class,
