@@ -2,6 +2,7 @@ package com.lehnade.kobo;
 
 import org.flywaydb.core.Flyway;
 import org.jooq.Field;
+import org.jooq.SQLDialect;
 import org.jooq.Table;
 import org.jooq.impl.DSL;
 import org.junit.jupiter.api.Assertions;
@@ -25,15 +26,14 @@ public class MigrationTest {
                 password)
             .load().migrate();
 
-        try(var ctx = DSL.using(url, username, password)) {
-            ctx.insertInto(ACCOUNT, ACCOUNT_ID, ACCOUNT_BALANCE)
-                    .values(1L, 100L)
-                    .execute();
-            Long balance = ctx.select(ACCOUNT_BALANCE).from(ACCOUNT)
-                    .where(ACCOUNT_ID.eq(1L))
-                    .fetchOne(ACCOUNT_BALANCE);
+        var ctx = DSL.using(Postgres.dataSource(), SQLDialect.POSTGRES);
+        ctx.insertInto(ACCOUNT, ACCOUNT_ID, ACCOUNT_BALANCE)
+                .values(1L, 100L)
+                .execute();
+        Long balance = ctx.select(ACCOUNT_BALANCE).from(ACCOUNT)
+                .where(ACCOUNT_ID.eq(1L))
+                .fetchOne(ACCOUNT_BALANCE);
 
-            Assertions.assertEquals(100L, balance);
-        }
+        Assertions.assertEquals(100L, balance);
     }
 }

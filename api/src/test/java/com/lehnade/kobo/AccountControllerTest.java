@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.Javalin;
 import org.jooq.DSLContext;
 import org.jooq.Field;
+import org.jooq.SQLDialect;
 import org.jooq.Table;
 import org.jooq.impl.DSL;
 import org.junit.jupiter.api.*;
@@ -25,9 +26,7 @@ public class AccountControllerTest {
 
     @BeforeAll
     static void init() {
-        dsl = DSL.using(Postgres.CONTAINER.getJdbcUrl(),
-                Postgres.CONTAINER.getUsername(),
-                Postgres.CONTAINER.getPassword());
+        dsl = DSL.using(Postgres.dataSource(), SQLDialect.POSTGRES);
         app = KoboApi.create(dsl).start(0);
         port = app.port();
         objectMapper = new ObjectMapper();
