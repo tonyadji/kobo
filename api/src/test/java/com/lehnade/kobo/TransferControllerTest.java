@@ -12,11 +12,16 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.util.UUID;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class TransferControllerTest {
 
     private static final Table<?> ACCOUNTS = DSL.table("accounts");
+    private static final Table<?> TRANSFERS = DSL.table("transfers");
     private static final Table<?> IDEMPOTENCY_KEYS = DSL.table("transfers_idempotency_keys");
     private static final Field<Long> ID = DSL.field("id", Long.class);
     private static final Field<Long> BALANCE_MINOR = DSL.field("balance_minor", Long.class);
@@ -326,6 +331,62 @@ public class TransferControllerTest {
         Assertions.assertEquals(retryResponse.body(), response.body());
         Assertions.assertEquals(retryKey.responseBody(), firstCallKey.responseBody());
         Assertions.assertEquals(retryKey.status(), firstCallKey.status());
+    }
+
+    @Disabled("one shared JDBC connection: 201 for a rolled-back transfer, fixed by a DataSource")
+    @RepeatedTest(5)
+    void concurrentTransferShouldDebitOnce() throws InterruptedException {
+        // arrange
+        long from = 2L;
+        long to = 3L;
+        long amount = 60;
+        insertAccountsWithBalance(2L, 200L);
+        insertAccountsWithBalance(3L, 200L);
+        var  initialRequest = requestDto(from, to, amount);
+        String key = UUID.randomUUID().toString();
+        var numberOfThreads = 10;
+        var threads = new Thread[numberOfThreads];
+        var latch = new CountDownLatch(1);
+        Map<Integer, AtomicInteger> responses = new ConcurrentHashMap<>();
+        Set<String> createdBodies = ConcurrentHashMap.newKeySet();
+        var errors = new CopyOnWriteArrayList<Exception>();
+
+        for (int i = 0; i < numberOfThreads; i++) {
+            threads[i] = new Thread(() -> {
+                try {
+                    latch.await();
+                    var response = post("/transfers", initialRequest, key);
+                    responses.computeIfAbsent(response.statusCode(), k -> new AtomicInteger(0))
+                            .incrementAndGet();
+                    if (response.statusCode() == 201) createdBodies.add(response.body());
+                } catch (Exception e) {
+                    errors.add(e);
+                }
+            });
+        }
+
+        for (Thread thread : threads) thread.start();
+        latch.countDown();
+
+        for (Thread thread : threads)  thread.join();
+
+
+        long fromBalanceAfter = getAccountBalance(from);
+        long transferCount = countTransfers();
+        Map<Integer, Integer> statuses = new TreeMap<>();
+        responses.forEach((status, count) -> statuses.put(status, count.get()));
+
+        // assert
+        Assertions.assertAll(
+                () -> Assertions.assertTrue(errors.isEmpty(), "client errors: " + errors),
+                () -> Assertions.assertEquals(Map.of(201, numberOfThreads), statuses, "status codes"),
+                () -> Assertions.assertEquals(1, createdBodies.size(), "distinct 201 bodies: " + createdBodies),
+                () -> Assertions.assertEquals(1, transferCount, "transfers in DB"),
+                () -> Assertions.assertEquals(140, fromBalanceAfter, "sender balance"));
+    }
+
+    private long countTransfers() {
+        return dsl.selectCount().from(TRANSFERS).fetchOne(0, Long.class);
     }
 
     private IdempotencyKey getByKey(String key) {
