@@ -1,7 +1,7 @@
 package com.lehnade.kobo;
 
-public class UnknownAccountException extends RuntimeException {
+public class UnknownAccountException extends KoboException {
     public UnknownAccountException(String message) {
-        super(message);
+        super(message, APIError.UNKNOWN_ACCOUNT);
     }
 }

@@ -1,0 +1,8 @@
+package com.lehnade.kobo;
+
+enum APIError {
+    BAD_REQUEST,
+    UNKNOWN_ACCOUNT,
+    INSUFFICIENT_FUNDS,
+    INTERNAL_SERVER_ERROR, IDEMPOTENCY_KEY_ERROR;
+}

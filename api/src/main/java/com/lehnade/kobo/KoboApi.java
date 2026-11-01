@@ -50,10 +50,4 @@ public class KoboApi {
         return app;
     }
 
-     enum APIError {
-        BAD_REQUEST,
-        UNKNOWN_ACCOUNT,
-        INSUFFICIENT_FUNDS,
-        INTERNAL_SERVER_ERROR;
-    }
 }

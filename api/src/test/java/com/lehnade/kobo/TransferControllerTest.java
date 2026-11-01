@@ -12,12 +12,19 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.UUID;
 
 public class TransferControllerTest {
 
     private static final Table<?> ACCOUNTS = DSL.table("accounts");
+    private static final Table<?> IDEMPOTENCY_KEYS = DSL.table("transfers_idempotency_keys");
     private static final Field<Long> ID = DSL.field("id", Long.class);
     private static final Field<Long> BALANCE_MINOR = DSL.field("balance_minor", Long.class);
+    private static final Field<String> KEY = DSL.field("key", String.class);
+    private static final Field<String> RESPONSE_BODY = DSL.field("response_body", String.class);
+    private static final Field<String> REQUEST_HASH = DSL.field("request_hash", String.class);
+    private static final Field<String> STATUS = DSL.field("status", String.class);
+    private static final Field<Integer> HTTP_STATUS = DSL.field("http_status", Integer.class);
     private static DSLContext dsl;
     private static int port;
     private static Javalin app;
@@ -45,9 +52,11 @@ public class TransferControllerTest {
         insertAccountsWithBalance(2L, 200L);
         insertAccountsWithBalance(3L, 150L);
         var transferRequestDto = requestDto(2L, 3L, 100L);
+        var key = UUID.randomUUID().toString();
 
         // act
-        HttpResponse<String> response = post("/transfers", transferRequestDto);
+        HttpResponse<String> response = post("/transfers", transferRequestDto, key);
+        System.out.println(response.body());
         TransferResponseDto result = objectMapper.readValue(response.body(), TransferResponseDto.class);
 
         // assert
@@ -63,9 +72,10 @@ public class TransferControllerTest {
         insertAccountsWithBalance(2L, fromBalanceBefore);
         insertAccountsWithBalance(3L, toBalanceBefore);
         var transferRequestDto = requestDto(2L, 3L, 0L);
+        var key = UUID.randomUUID().toString();
 
         // act
-        HttpResponse<String> response = post("/transfers", transferRequestDto);
+        HttpResponse<String> response = post("/transfers", transferRequestDto, key);
         long fromBalanceAfter = getAccountBalance(2L);
         long toBalanceAfter = getAccountBalance(3L);
 
@@ -85,9 +95,10 @@ public class TransferControllerTest {
         insertAccountsWithBalance(2L, fromBalanceBefore);
         insertAccountsWithBalance(3L, toBalanceBefore);
         var transferRequestDto = requestDto(2L, 2L, 100L);
+        var key = UUID.randomUUID().toString();
 
         // act
-        HttpResponse<String> response = post("/transfers", transferRequestDto);
+        HttpResponse<String> response = post("/transfers", transferRequestDto, key);
         long fromBalanceAfter = getAccountBalance(2L);
         long toBalanceAfter = getAccountBalance(3L);
 
@@ -105,9 +116,10 @@ public class TransferControllerTest {
         long toBalanceBefore = 150L;
         insertAccountsWithBalance(2L, fromBalanceBefore);
         insertAccountsWithBalance(3L, toBalanceBefore);
+        var key = UUID.randomUUID().toString();
 
         // act
-        HttpResponse<String> response = post("/transfers", "{" );
+        HttpResponse<String> response = post("/transfers", "{", key);
         long fromBalanceAfter = getAccountBalance(2L);
         long toBalanceAfter = getAccountBalance(3L);
 
@@ -124,9 +136,10 @@ public class TransferControllerTest {
         long toBalanceBefore = 150L;
         insertAccountsWithBalance(2L, fromBalanceBefore);
         insertAccountsWithBalance(3L, toBalanceBefore);
+        var key = UUID.randomUUID().toString();
 
         // act
-        HttpResponse<String> response = post("/transfers", "{\"to\": 3, \"amount\": 100}" );
+        HttpResponse<String> response = post("/transfers", "{\"to\": 3, \"amount\": 100}", key);
         long fromBalanceAfter = getAccountBalance(2L);
         long toBalanceAfter = getAccountBalance(3L);
 
@@ -143,9 +156,10 @@ public class TransferControllerTest {
         long toBalanceBefore = 150L;
         insertAccountsWithBalance(2L, fromBalanceBefore);
         insertAccountsWithBalance(3L, toBalanceBefore);
+        var key = UUID.randomUUID().toString();
 
         // act
-        HttpResponse<String> response = post("/transfers", "{\"from\": 2, \"to\": 3, \"amount\": 100.41}" );
+        HttpResponse<String> response = post("/transfers", "{\"from\": 2, \"to\": 3, \"amount\": 100.41}", key);
         long fromBalanceAfter = getAccountBalance(2L);
         long toBalanceAfter = getAccountBalance(3L);
 
@@ -159,9 +173,10 @@ public class TransferControllerTest {
     void unknownFromAccountShouldReturn404() throws Exception {
         // arrange
         var transferRequestDto = requestDto(2L, 3L, 100L);
+        var key = UUID.randomUUID().toString();
 
         // act
-        HttpResponse<String> response = post("/transfers", transferRequestDto);
+        HttpResponse<String> response = post("/transfers", transferRequestDto, key);
 
         // assert
         Assertions.assertEquals(404, response.statusCode());
@@ -174,9 +189,10 @@ public class TransferControllerTest {
         long fromBalanceBefore = 200L;
         insertAccountsWithBalance(2L, fromBalanceBefore);
         var transferRequestDto = requestDto(2L, 3L, 100L);
+        var key = UUID.randomUUID().toString();
 
         // act
-        HttpResponse<String> response = post("/transfers", transferRequestDto);
+        HttpResponse<String> response = post("/transfers", transferRequestDto, key);
         long fromBalanceAfter = getAccountBalance(2L);
 
         // assert
@@ -191,9 +207,10 @@ public class TransferControllerTest {
         insertAccountsWithBalance(2L, 200L);
         insertAccountsWithBalance(3L, 150L);
         var transferRequestDto = requestDto(2L, 3L, 300L);
+        var key = UUID.randomUUID().toString();
 
         // act
-        HttpResponse<String> response = post("/transfers", transferRequestDto);
+        HttpResponse<String> response = post("/transfers", transferRequestDto, key);
 
         // assert
         Assertions.assertEquals(422, response.statusCode());
@@ -202,8 +219,30 @@ public class TransferControllerTest {
 
 
     @Test
-    @Disabled("double debit reproduced, fixed later")
-    void transfer300ShouldDebitSenderBalanceAndCreditReceiverBalance() throws Exception {
+    void theSameKeyWithTheSameBodyReturnsTheStoredResponseAndDebitIsAppliedOnce() throws Exception {
+        long from = 2L;
+        long to = 3L;
+        long amount = 300;
+        insertAccountsWithBalance(from, 1000L);
+        insertAccountsWithBalance(to, 0L);
+        var  transferRequestDto = requestDto(from, to, amount);
+        String key = UUID.randomUUID().toString();
+
+        // act
+        var initialResult = post("/transfers", transferRequestDto, key);
+        var retryResult = post("/transfers", transferRequestDto, key);
+        var sender = objectMapper.readValue(getAccount(String.valueOf(from)).body(), Account.class);
+        var receiver = objectMapper.readValue(getAccount(String.valueOf(to)).body(), Account.class);
+
+
+        // assert
+        Assertions.assertEquals(700, sender.balance());
+        Assertions.assertEquals(300, receiver.balance());
+        Assertions.assertEquals(retryResult.body(), initialResult.body());
+    }
+
+    @Test
+    void transferWithoutIdempotencyKeyReturns400() throws Exception {
         long from = 2L;
         long to = 3L;
         long amount = 300;
@@ -212,21 +251,99 @@ public class TransferControllerTest {
         var  transferRequestDto = requestDto(from, to, amount);
 
         // act
-        post("/transfers", transferRequestDto);
-        post("/transfers", transferRequestDto);
-        var sender = objectMapper.readValue(getAccount(String.valueOf(from)).body(), Account.class);
-        var receiver = objectMapper.readValue(getAccount(String.valueOf(to)).body(), Account.class);
+        var response = post("/transfers", transferRequestDto);
+        Assertions.assertEquals(400, response.statusCode());
+    }
 
+    @Test
+    void transferToUnknownAccountReplayedWithTheSameKeyShouldReturn404AndSamePayload() throws Exception {
+        // arrange
+        long from = 2L;
+        long to = 3L;
+        long amount = 100;
+        insertAccountsWithBalance(2L, 200L);
+        var  transferRequestDto = requestDto(from, to, amount);
+        String key = UUID.randomUUID().toString();
 
-        // assert
-        Assertions.assertEquals(700, sender.balance());
-        Assertions.assertEquals(300, receiver.balance());
+        // act
+        var response = post("/transfers", transferRequestDto, key);
+        var firstCallKey = getByKey(key);
+        var retryResponse = post("/transfers", transferRequestDto, key);
+        var retryKey = getByKey(key);
 
+        // assertions
+        Assertions.assertEquals(404, response.statusCode());
+        Assertions.assertEquals(404, retryResponse.statusCode());
+        Assertions.assertEquals(retryKey.responseBody(), firstCallKey.responseBody());
+        Assertions.assertEquals(retryKey.status(), firstCallKey.status());
+    }
+
+    @Test
+    void theSameKeyWithDifferentBodyShouldReturn422AndNothingIsDebited() throws Exception {
+        // arrange
+        long from = 2L;
+        long to = 3L;
+        long amount = 400;
+        insertAccountsWithBalance(2L, 1000L);
+        insertAccountsWithBalance(3L, 200L);
+        var  initialRequest = requestDto(from, to, amount);
+        var  retryRequest = requestDto(from, to, 500);
+        String key = UUID.randomUUID().toString();
+
+        // act
+        var response = post("/transfers", initialRequest, key);
+        var firstCallKey = getByKey(key);
+        var retryResponse = post("/transfers", retryRequest, key);
+        var retryKey = getByKey(key);
+        var balanceAfter = getAccountBalance(from);
+        // assertions
+        Assertions.assertEquals(201, response.statusCode());
+        Assertions.assertEquals(422, retryResponse.statusCode());
+        Assertions.assertEquals(600, balanceAfter);
+    }
+
+    @Test
+    void rejectedTransferInsufficientReplayedWithTheSameKeyReturnsTheSameRejection() throws Exception {
+        // arrange
+        long from = 2L;
+        long to = 3L;
+        long amount = 400;
+        insertAccountsWithBalance(2L, 200L);
+        insertAccountsWithBalance(3L, 200L);
+        var  initialRequest = requestDto(from, to, amount);
+        String key = UUID.randomUUID().toString();
+
+        // act
+        var response = post("/transfers", initialRequest, key);
+        var firstCallKey = getByKey(key);
+        updateBalance(from, 1000);
+        var retryResponse = post("/transfers", initialRequest, key);
+        var retryKey = getByKey(key);
+
+        // assertions
+        Assertions.assertEquals(422, response.statusCode());
+        Assertions.assertEquals(422, retryResponse.statusCode());
+        Assertions.assertEquals(retryResponse.body(), response.body());
+        Assertions.assertEquals(retryKey.responseBody(), firstCallKey.responseBody());
+        Assertions.assertEquals(retryKey.status(), firstCallKey.status());
+    }
+
+    private IdempotencyKey getByKey(String key) {
+        return dsl.select(KEY, REQUEST_HASH, RESPONSE_BODY, STATUS, HTTP_STATUS).from(IDEMPOTENCY_KEYS)
+                .where(KEY.eq(key))
+                .fetchOneInto(IdempotencyKey.class);
     }
 
     private void insertAccountsWithBalance(long account, long balance) {
         dsl.insertInto(ACCOUNTS, ID, BALANCE_MINOR)
                 .values(account, balance)
+                .execute();
+    }
+
+    private void updateBalance(long account, long balance) {
+        dsl.update(ACCOUNTS)
+                .set(BALANCE_MINOR, balance)
+                .where(ID.eq(account))
                 .execute();
     }
 
@@ -242,6 +359,21 @@ public class TransferControllerTest {
                     .append(path).toString();
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(uri))
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            return response;
+        }
+    }
+
+    private HttpResponse<String> post(String path, String body, String idempotencyKey) throws Exception {
+        try(HttpClient client = HttpClient.newHttpClient()) {
+            String uri = new StringBuilder().append("http://localhost:").append(port)
+                    .append(path).toString();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(uri))
+                    .header("Idempotency-Key", idempotencyKey)
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
 

@@ -14,6 +14,6 @@ final class Postgres {
     }
 
     static void reset(DSLContext dsl) {
-        dsl.execute("TRUNCATE transfers, accounts RESTART IDENTITY");
+        dsl.execute("TRUNCATE transfers, accounts, transfers_idempotency_keys RESTART IDENTITY");
     }
 }
