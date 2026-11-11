@@ -16,8 +16,8 @@ A mini neobank to **measure, not guess**, how money moves safely under concurren
 ## Key findings
 
 - **Lock ordering:** 150 s → 0.28 s for 800 transfers on 10 hot accounts, deadlocks gone.
-- **No lock at all:** +1,606,478 of money created out of thin air in memory, 10 accounts.
-- **One global lock** reaches 97% of its computed ceiling (1 / 28 µs ≈ 35,600 transfers/s).
+- **No lock at all:** +621,542 (median of 5 runs, up to +1.6 M) of money created out of thin air in memory, 10 accounts.
+- **One global lock** reaches 97% of its computed ceiling (1 / 28.1 µs ≈ 35,600 transfers/s).
 - **CAS** is 1.8× faster than ordered locks with 20 µs of work, but no reader can see a consistent total.
 
 ## How to run
