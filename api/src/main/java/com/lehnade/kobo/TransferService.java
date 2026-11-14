@@ -1,14 +1,16 @@
 package com.lehnade.kobo;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lehnade.kobo.application.TransferOutcome;
+import com.lehnade.kobo.domain.AccountId;
+import com.lehnade.kobo.domain.TransferId;
+import com.lehnade.kobo.domain.TransferRejection;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Table;
 import org.jooq.impl.DSL;
 
 import java.util.List;
-import java.util.Map;
 
 public class TransferService {
 
@@ -22,43 +24,25 @@ public class TransferService {
     private static final Field<Long> TO_ACCOUNT = DSL.field("to_account_id", Long.class);
     private static final Field<String> KEY = DSL.field("key", String.class);
     private static final Field<String> REQUEST_HASH = DSL.field("request_hash", String.class);
-    private static final Field<String> RESPONSE_BODY = DSL.field("response_body", String.class);
-    private static final Field<String> STATUS = DSL.field("status", String.class);
-    private static final Field<Integer> HTTP_STATUS = DSL.field("http_status", Integer.class);
+    private static final Field<Long> TRANSFER_ID = DSL.field("transfer_id", Long.class);
+    private static final Field<String> OUTCOME = DSL.field("outcome", String.class);
+    private static final Field<Long> ACCOUNT_ID = DSL.field("account_id", Long.class);
     private static final ObjectMapper mapper = new ObjectMapper();
+    protected static final String UNKNOWN_ACCOUNT = "Unknown account ";
     private final DSLContext ctx;
 
     public TransferService(DSLContext ctx) {
         this.ctx = ctx;
     }
 
-    public long transfer(long from, long to, long amount) {
-        if (from == to) { throw new InvalidTransferException("Self transfer is not allowed") ; }
-        if (amount <= 0) { throw new InvalidTransferException("Amount should be greater than 0") ; }
-
-        long transferId = ctx.transactionResult(configuration -> {
-            var txCtx = DSL.using(configuration);
-            if (from < to) {
-                debit(from, amount, txCtx);
-                credit(to, amount, txCtx);
-            } else {
-                credit(to, amount, txCtx);
-                debit(from, amount, txCtx);
-            }
-
-            return transfer(from, to, amount, txCtx);
-        });
-        return transferId;
-    }
-
-    public TransferResponseDto.StoredResponse transfer(long from, long to, long amount, IdempotencyKey key) {
+    public TransferOutcome transfer(long from, long to, long amount, IdempotencyKey key) {
         if (from == to) {
             throw new InvalidTransferException("Self transfer is not allowed");
         }
         if (amount <= 0) {
             throw new InvalidTransferException("Amount should be greater than 0");
         }
-        TransferResponseDto.StoredResponse transactionResponse = ctx.transactionResult(configuration -> {
+        TransferOutcome transactionResponse = ctx.transactionResult(configuration -> {
             var outerTx = DSL.using(configuration);
             int insertedRows = insertIdempotencyKey(key, outerTx);
             if (insertedRows == 0) {
@@ -75,50 +59,37 @@ public class TransferService {
                         debit(from, amount, innerTx);
                     }
                     long transferIdentifier = transfer(from, to, amount, innerTx);
-                    updateIdempotencyKey(key.key(), payloadOf(transferIdentifier), "SUCCESS", 201, innerTx);
-                    var body = mapper.writeValueAsString(new TransferResponseDto(transferIdentifier));
-                    return new TransferResponseDto.StoredResponse(201, body);
+                    updateIdempotencyKey(key.key(), transferIdentifier, "COMPLETED", null, innerTx);
+
+                    return new TransferOutcome.Completed(new TransferId(transferIdentifier));
                 });
             } catch (UnknownAccountException e) {
-                updateIdempotencyKey(key.key(), payloadOf(e), "FAILED", 404, outerTx);
-                return new TransferResponseDto.StoredResponse(404, payloadOf(e));
+                var unknowAccountId = e.getMessage().split(UNKNOWN_ACCOUNT)[1];
+                AccountId accountId = new AccountId(Long.parseLong(unknowAccountId));
+                updateIdempotencyKey(key.key(), null, "UNKNOWN_ACCOUNT", accountId.value(), outerTx);
+                return new TransferOutcome.Rejected(new TransferRejection.UnknownAccount(accountId));
             } catch (InsufficientFundException e) {
-                updateIdempotencyKey(key.key(), payloadOf(e), "FAILED", 422, outerTx);
-                return new TransferResponseDto.StoredResponse(422, payloadOf(e));
+                updateIdempotencyKey(key.key(), null, "INSUFFICIENT_FUNDS", null, outerTx);
+                return new TransferOutcome.Rejected(new TransferRejection.InsufficientFunds());
             }
         });
         return transactionResponse;
     }
 
-    private long updateIdempotencyKey(String key, String payload, String status, int httpStatus, DSLContext ctx) {
+    private long updateIdempotencyKey(String key, Long transferId, String outcome, Long accountId, DSLContext ctx) {
         return ctx.update(IDEMPOTENCY_KEYS)
-                .set(RESPONSE_BODY, payload)
-                .set(STATUS, status)
-                .set(HTTP_STATUS, httpStatus)
+                .set(TRANSFER_ID, transferId)
+                .set(OUTCOME, outcome)
+                .set(ACCOUNT_ID, accountId)
                 .where(KEY.eq(key))
                 .execute();
-    }
-
-    private String payloadOf(long from, long to, long amount) throws JsonProcessingException {
-        Map<String, Object> payload = Map.of("from", from, "to", to, "amount", amount);
-        return new ObjectMapper().writeValueAsString(payload);
-    }
-
-    private String payloadOf(long id) throws JsonProcessingException {
-        Map<String, Object> payload = Map.of("id", id);
-        return mapper.writeValueAsString(payload);
-    }
-
-    private String payloadOf(KoboException e) throws JsonProcessingException {
-        Map<String, Object> payload = Map.of("error", e.getError());
-        return new ObjectMapper().writeValueAsString(payload);
     }
 
     private void requireAccountExists(long account, DSLContext ctx) {
         boolean accountExists = ctx.fetchExists(
                 ctx.selectOne().from(ACCOUNTS).where(ID.eq(account)));
 
-        if (!accountExists) throw new UnknownAccountException("Unknown account " + account);
+        if (!accountExists) throw new UnknownAccountException(UNKNOWN_ACCOUNT + account);
     }
 
     private void debit(long from, long amount, DSLContext ctx) {
@@ -139,7 +110,7 @@ public class TransferService {
                 .where(ID.eq(to))
                 .execute();
         if (updatedRow == 0) {
-            throw new UnknownAccountException("Unknown account " + to);
+            throw new UnknownAccountException(UNKNOWN_ACCOUNT + to);
         }
     }
 
@@ -151,27 +122,31 @@ public class TransferService {
     }
 
     private int insertIdempotencyKey(IdempotencyKey key, DSLContext ctx) {
-        return ctx.insertInto(IDEMPOTENCY_KEYS, KEY, REQUEST_HASH, STATUS)
-                .values(key.key(), key.requestHash(), key.status())
+        return ctx.insertInto(IDEMPOTENCY_KEYS, KEY, REQUEST_HASH, OUTCOME)
+                .values(key.key(), key.requestHash(), key.outcome())
                 .onConflict(List.of(KEY))
                 .doNothing()
                 .execute();
     }
 
     private IdempotencyKey getKey(String key, DSLContext ctx) {
-        return ctx.select(KEY, REQUEST_HASH, RESPONSE_BODY, STATUS, HTTP_STATUS).from(IDEMPOTENCY_KEYS)
+        return ctx.select(KEY, REQUEST_HASH, OUTCOME, TRANSFER_ID, ACCOUNT_ID).from(IDEMPOTENCY_KEYS)
                 .where(KEY.eq(key))
                 .fetchOneInto(IdempotencyKey.class);
     }
 
-    private TransferResponseDto.StoredResponse handleExistingIdempotencyKey(IdempotencyKey key, DSLContext ctx) throws JsonProcessingException {
+    private TransferOutcome handleExistingIdempotencyKey(IdempotencyKey key, DSLContext ctx) {
         IdempotencyKey existingKey = getKey(key.key(), ctx);
-        if (existingKey.status().equals("PROCESSING")) {
-            return new TransferResponseDto.StoredResponse(409, existingKey.responseBody());
+        if (!key.requestHash().equals(existingKey.requestHash())) {
+            return new TransferOutcome.Rejected(new TransferRejection.ConflictingIdempotencyKey());
         }
-        if (!existingKey.requestHash().equals(key.requestHash())) {
-            return new TransferResponseDto.StoredResponse(422, payloadOf(new IdempotencyKeyException("")));
-        }
-        return new TransferResponseDto.StoredResponse(existingKey.httpStatus(), existingKey.responseBody());
+        return switch (existingKey.outcome()) {
+            case "PROCESSING" -> new TransferOutcome.Processing();
+            case "COMPLETED" -> new TransferOutcome.Completed(new TransferId(existingKey.transferId()));
+            case "INSUFFICIENT_FUNDS" -> new TransferOutcome.Rejected(new TransferRejection.InsufficientFunds());
+            case "UNKNOWN_ACCOUNT" -> new TransferOutcome.Rejected(new TransferRejection.UnknownAccount(new AccountId(existingKey.accountId())));
+            default -> throw new IllegalStateException("Unexpected value: " + existingKey.outcome());
+        };
     }
+
 }

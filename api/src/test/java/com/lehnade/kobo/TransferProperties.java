@@ -39,7 +39,7 @@ public class TransferProperties {
         for (Transfer transfer : transfers) {
             try {
                 var response = transferService.transfer(transfer.from(), transfer.to(), transfer.amount(), keyOf(transfer));
-                Statistics.collect(response.status());
+                Statistics.collect(response.outcome());
             } catch (KoboException e) {
                 Statistics.collect(e.getClass().getSimpleName());
             }

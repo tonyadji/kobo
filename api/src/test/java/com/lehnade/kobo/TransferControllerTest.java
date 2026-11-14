@@ -27,10 +27,10 @@ public class TransferControllerTest {
     private static final Field<Long> ID = DSL.field("id", Long.class);
     private static final Field<Long> BALANCE_MINOR = DSL.field("balance_minor", Long.class);
     private static final Field<String> KEY = DSL.field("key", String.class);
-    private static final Field<String> RESPONSE_BODY = DSL.field("response_body", String.class);
+    private static final Field<String> OUTCOME = DSL.field("outcome", String.class);
     private static final Field<String> REQUEST_HASH = DSL.field("request_hash", String.class);
-    private static final Field<String> STATUS = DSL.field("status", String.class);
-    private static final Field<Integer> HTTP_STATUS = DSL.field("http_status", Integer.class);
+    private static final Field<Long> TRANSFER_ID = DSL.field("transfer_id", Long.class);
+    private static final Field<Long> ACCOUNT_ID = DSL.field("account_id", Long.class);
     private static DSLContext dsl;
     private static int port;
     private static Javalin app;
@@ -278,8 +278,9 @@ public class TransferControllerTest {
         // assertions
         Assertions.assertEquals(404, response.statusCode());
         Assertions.assertEquals(404, retryResponse.statusCode());
-        Assertions.assertEquals(retryKey.responseBody(), firstCallKey.responseBody());
-        Assertions.assertEquals(retryKey.status(), firstCallKey.status());
+        Assertions.assertEquals(retryKey.outcome(), firstCallKey.outcome());
+        Assertions.assertEquals(retryKey.accountId(), firstCallKey.accountId());
+        Assertions.assertEquals(retryResponse.body(), response.body());
     }
 
     @Test
@@ -328,8 +329,7 @@ public class TransferControllerTest {
         Assertions.assertEquals(422, response.statusCode());
         Assertions.assertEquals(422, retryResponse.statusCode());
         Assertions.assertEquals(retryResponse.body(), response.body());
-        Assertions.assertEquals(retryKey.responseBody(), firstCallKey.responseBody());
-        Assertions.assertEquals(retryKey.status(), firstCallKey.status());
+        Assertions.assertEquals(retryKey.outcome(), firstCallKey.outcome());
     }
 
     @RepeatedTest(5)
@@ -388,7 +388,7 @@ public class TransferControllerTest {
     }
 
     private IdempotencyKey getByKey(String key) {
-        return dsl.select(KEY, REQUEST_HASH, RESPONSE_BODY, STATUS, HTTP_STATUS).from(IDEMPOTENCY_KEYS)
+        return dsl.select(KEY, REQUEST_HASH, OUTCOME, TRANSFER_ID, ACCOUNT_ID).from(IDEMPOTENCY_KEYS)
                 .where(KEY.eq(key))
                 .fetchOneInto(IdempotencyKey.class);
     }

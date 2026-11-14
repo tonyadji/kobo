@@ -1,5 +1,6 @@
 package com.lehnade.kobo;
 
+import com.lehnade.kobo.application.TransferOutcome;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.SQLDialect;
@@ -9,6 +10,8 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.util.UUID;
 
 public class TransferServiceTest {
 
@@ -38,10 +41,10 @@ public class TransferServiceTest {
         long balanceFromBefore = getBalance(from);
         long balanceToBefore = getBalance(to);
         long totalBalanceBefore = balanceFromBefore + balanceToBefore;
-
+        IdempotencyKey key = keyOf(from, to, amount);
         // act
         TransferService transferService = new TransferService(dsl);
-        transferService.transfer(from, to, amount);
+        transferService.transfer(from, to, amount, key);
 
         // assert
         long balanceFromAfter = getBalance(from);
@@ -65,18 +68,18 @@ public class TransferServiceTest {
         long balanceFromBefore = getBalance(from);
         long balanceToBefore = getBalance(to);
         long totalBalanceBefore = balanceFromBefore + balanceToBefore;
+        IdempotencyKey key = keyOf(from, to, amount);
 
         // act
         TransferService transferService = new TransferService(dsl);
-        InsufficientFundException exception = Assertions.assertThrows(InsufficientFundException.class,
-                () -> transferService.transfer(from, to, amount));
+        TransferOutcome outcome = transferService.transfer(from, to, amount, key);
 
         // assert
         long balanceFromAfter = getBalance(from);
         long balanceToAfter = getBalance(to);
         long totalBalanceAfter = balanceFromAfter + balanceToAfter;
 
-        Assertions.assertEquals("Unsufficient balance", exception.getMessage());
+        Assertions.assertEquals("INSUFFICIENT_FUNDS", outcome.outcome());
         Assertions.assertEquals(totalBalanceBefore, totalBalanceAfter);
         Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
         Assertions.assertEquals(balanceToBefore, balanceToAfter);
@@ -93,11 +96,11 @@ public class TransferServiceTest {
         long balanceFromBefore = getBalance(from);
         long balanceToBefore = getBalance(to);
         long totalBalanceBefore = balanceFromBefore + balanceToBefore;
-
+        IdempotencyKey key = keyOf(from, to, amount);
         // act
         TransferService transferService = new TransferService(dsl);
         InvalidTransferException exception = Assertions.assertThrows(InvalidTransferException.class,
-                () -> transferService.transfer(from, to, amount));
+                () -> transferService.transfer(from, to, amount, key));
 
         // assert
         long balanceFromAfter = getBalance(from);
@@ -120,11 +123,11 @@ public class TransferServiceTest {
         insertAccountsWithBalance(to, 150L);
         long balanceFromBefore = getBalance(from);
         long totalBalanceBefore = balanceFromBefore;
-
+        IdempotencyKey key = keyOf(from, to, amount);
         // act
         TransferService transferService = new TransferService(dsl);
         InvalidTransferException exception = Assertions.assertThrows(InvalidTransferException.class,
-                () -> transferService.transfer(from, from, amount));
+                () -> transferService.transfer(from, from, amount, key));
 
         // assert
         long balanceFromAfter = getBalance(from);
@@ -144,16 +147,15 @@ public class TransferServiceTest {
         insertAccountsWithBalance(from, 200L);
 
         long balanceFromBefore = getBalance(from);
-
+        IdempotencyKey key = keyOf(from, to, amount);
         // act
         TransferService transferService = new TransferService(dsl);
-        UnknownAccountException exception = Assertions.assertThrows(UnknownAccountException.class,
-                () -> transferService.transfer(from, to, amount));
+        TransferOutcome outcome = transferService.transfer(from, to, amount, key);
 
         // assert
         long balanceFromAfter = getBalance(from);
 
-        Assertions.assertEquals("Unknown account " + to, exception.getMessage());
+        Assertions.assertEquals("UNKNOWN_ACCOUNT", outcome.outcome());
         Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
     }
 
@@ -163,14 +165,13 @@ public class TransferServiceTest {
         long from = 2L;
         long to = 3L;
         long amount = 10;
-
+        IdempotencyKey key = keyOf(from, to, amount);
         // act
         TransferService transferService = new TransferService(dsl);
-        UnknownAccountException exception = Assertions.assertThrows(UnknownAccountException.class,
-                () -> transferService.transfer(from, to, amount));
+        TransferOutcome outcome = transferService.transfer(from, to, amount, key);
 
         // assert
-        Assertions.assertEquals("Unknown account " + from, exception.getMessage());
+        Assertions.assertEquals("UNKNOWN_ACCOUNT", outcome.outcome());
     }
 
     private void insertAccountsWithBalance(long from, long balance) {
@@ -183,6 +184,11 @@ public class TransferServiceTest {
         return dsl.select(BALANCE_MINOR).from(ACCOUNTS)
                 .where(ID.eq(id))
                 .fetchOne(BALANCE_MINOR);
+    }
+
+    private IdempotencyKey keyOf(long from, long to, long amount) {
+        var request = new TransferRequestDto(from, to, amount);
+        return IdempotencyKey.of(UUID.randomUUID().toString(), HashHelper.hash(request));
     }
 
 }
