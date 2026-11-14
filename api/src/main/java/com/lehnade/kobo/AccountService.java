@@ -20,6 +20,6 @@ public class AccountService {
         return ctx.select(ID, BALANCE_MINOR).from(ACCOUNT_TABLE)
                 .where(ID.eq(id))
                 .fetchOptionalInto(Account.class)
-                .orElseThrow(() -> new UnknownAccountException("Account with id " + id + " not found"));
+                .orElseThrow(() -> new UnknownAccountException("Unknown account", id));
     }
 }

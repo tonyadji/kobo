@@ -57,10 +57,8 @@ public class TransferService {
                     return new TransferOutcome.Completed(new TransferId(transferIdentifier));
                 });
             } catch (UnknownAccountException e) {
-                var unknowAccountId = e.getMessage().split(UNKNOWN_ACCOUNT)[1];
-                AccountId accountId = new AccountId(Long.parseLong(unknowAccountId));
-                updateIdempotencyKey(key.key(), null, "UNKNOWN_ACCOUNT", accountId.value(), outerTx);
-                return new TransferOutcome.Rejected(new TransferRejection.UnknownAccount(accountId));
+                updateIdempotencyKey(key.key(), null, "UNKNOWN_ACCOUNT", e.getAccountId(), outerTx);
+                return new TransferOutcome.Rejected(new TransferRejection.UnknownAccount(new AccountId(e.getAccountId())));
             } catch (InsufficientFundException e) {
                 updateIdempotencyKey(key.key(), null, "INSUFFICIENT_FUNDS", null, outerTx);
                 return new TransferOutcome.Rejected(new TransferRejection.InsufficientFunds());
@@ -82,7 +80,7 @@ public class TransferService {
         boolean accountExists = ctx.fetchExists(
                 ctx.selectOne().from(ACCOUNTS).where(ID.eq(account)));
 
-        if (!accountExists) throw new UnknownAccountException(UNKNOWN_ACCOUNT + account);
+        if (!accountExists) throw new UnknownAccountException(UNKNOWN_ACCOUNT, account);
     }
 
     private void debit(long from, long amount, DSLContext ctx) {
@@ -103,7 +101,7 @@ public class TransferService {
                 .where(ID.eq(to))
                 .execute();
         if (updatedRow == 0) {
-            throw new UnknownAccountException(UNKNOWN_ACCOUNT + to);
+            throw new UnknownAccountException(UNKNOWN_ACCOUNT, to);
         }
     }
 
