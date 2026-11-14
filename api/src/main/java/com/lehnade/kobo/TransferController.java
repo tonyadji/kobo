@@ -29,12 +29,11 @@ public class TransferController {
             case TransferOutcome.Completed completed
                     -> ctx.status(201).json(new TransferResponseDto(completed.id().value()));
             case TransferOutcome.Processing processing -> ctx.status(409).json(processing);
+            case TransferOutcome.KeyReused keyReused -> ctx.status(422).json(keyReused);
             case TransferOutcome.Rejected rejected -> {
                 switch (rejected.rejection()) {
                     case TransferRejection.InsufficientFunds insufficientFunds -> ctx.status(422).json(payloadOf(APIError.INSUFFICIENT_FUNDS));
                     case TransferRejection.UnknownAccount unknownAccount -> ctx.status(404).json(payloadOf(APIError.UNKNOWN_ACCOUNT)    );
-                    case TransferRejection.ConflictingIdempotencyKey cik -> ctx.status(422).json(payloadOf(APIError.IDEMPOTENCY_KEY_ERROR));
-                    case TransferRejection.ProcessingIdempotencyKey pi -> ctx.status(409).json(pi);
                 }
             }
         }

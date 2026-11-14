@@ -131,7 +131,7 @@ public class TransferService {
     private TransferOutcome handleExistingIdempotencyKey(IdempotencyKey key, DSLContext ctx) {
         IdempotencyKey existingKey = getKey(key.key(), ctx);
         if (!key.requestHash().equals(existingKey.requestHash())) {
-            return new TransferOutcome.Rejected(new TransferRejection.ConflictingIdempotencyKey());
+            return new TransferOutcome.KeyReused();
         }
         return switch (existingKey.outcome()) {
             case "PROCESSING" -> new TransferOutcome.Processing();

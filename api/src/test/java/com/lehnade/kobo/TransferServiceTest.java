@@ -1,6 +1,7 @@
 package com.lehnade.kobo;
 
 import com.lehnade.kobo.application.TransferOutcome;
+import com.lehnade.kobo.domain.DomainException;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.SQLDialect;
@@ -99,7 +100,7 @@ public class TransferServiceTest {
         IdempotencyKey key = keyOf(from, to, amount);
         // act
         TransferService transferService = new TransferService(dsl);
-        InvalidTransferException exception = Assertions.assertThrows(InvalidTransferException.class,
+        DomainException exception = Assertions.assertThrows(DomainException.class,
                 () -> transferService.transfer(from, to, amount, key));
 
         // assert
@@ -107,7 +108,7 @@ public class TransferServiceTest {
         long balanceToAfter = getBalance(to);
         long totalBalanceAfter = balanceFromAfter + balanceToAfter;
 
-        Assertions.assertEquals("Amount should be greater than 0", exception.getMessage());
+        Assertions.assertEquals("Amount minor must be positive", exception.getMessage());
         Assertions.assertEquals(totalBalanceBefore, totalBalanceAfter);
         Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
         Assertions.assertEquals(balanceToBefore, balanceToAfter);
@@ -126,14 +127,14 @@ public class TransferServiceTest {
         IdempotencyKey key = keyOf(from, to, amount);
         // act
         TransferService transferService = new TransferService(dsl);
-        InvalidTransferException exception = Assertions.assertThrows(InvalidTransferException.class,
+        DomainException exception = Assertions.assertThrows(DomainException.class,
                 () -> transferService.transfer(from, from, amount, key));
 
         // assert
         long balanceFromAfter = getBalance(from);
         long totalBalanceAfter = balanceFromAfter;
 
-        Assertions.assertEquals("Self transfer is not allowed", exception.getMessage());
+        Assertions.assertEquals("Self transfer not allowed", exception.getMessage());
         Assertions.assertEquals(totalBalanceBefore, totalBalanceAfter);
         Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
     }
