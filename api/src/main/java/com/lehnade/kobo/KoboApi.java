@@ -2,6 +2,7 @@ package com.lehnade.kobo;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lehnade.kobo.domain.DomainException;
 import io.javalin.Javalin;
 import io.javalin.json.JavalinJackson;
 import org.jooq.DSLContext;
@@ -35,6 +36,7 @@ public class KoboApi {
                 }
 
         );
+        app.exception(DomainException.class, (e, ctx) -> ctx.status(400).json(APIError.BAD_REQUEST));
         app.exception(InvalidTransferException.class,
                 (e, ctx) -> ctx.status(400).json(APIError.BAD_REQUEST));
         app.exception(UnknownAccountException.class,

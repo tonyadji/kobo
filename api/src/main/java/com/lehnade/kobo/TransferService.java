@@ -2,9 +2,7 @@ package com.lehnade.kobo;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lehnade.kobo.application.TransferOutcome;
-import com.lehnade.kobo.domain.AccountId;
-import com.lehnade.kobo.domain.TransferId;
-import com.lehnade.kobo.domain.TransferRejection;
+import com.lehnade.kobo.domain.*;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Table;
@@ -36,12 +34,7 @@ public class TransferService {
     }
 
     public TransferOutcome transfer(long from, long to, long amount, IdempotencyKey key) {
-        if (from == to) {
-            throw new InvalidTransferException("Self transfer is not allowed");
-        }
-        if (amount <= 0) {
-            throw new InvalidTransferException("Amount should be greater than 0");
-        }
+        Transfer.between(new AccountId(from), new AccountId(to), Money.of(amount));
         TransferOutcome transactionResponse = ctx.transactionResult(configuration -> {
             var outerTx = DSL.using(configuration);
             int insertedRows = insertIdempotencyKey(key, outerTx);
