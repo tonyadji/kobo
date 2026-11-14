@@ -332,6 +332,25 @@ public class TransferControllerTest {
         Assertions.assertEquals(retryKey.outcome(), firstCallKey.outcome());
     }
 
+    @Test
+    void inProgressKeyReturns409() throws Exception {
+        long from = 2L;
+        long to = 3L;
+        long amount = 400;
+        insertAccountsWithBalance(2L, 200L);
+        insertAccountsWithBalance(3L, 200L);
+        var  initialRequest = requestDto(from, to, amount);
+        String key = UUID.randomUUID().toString();
+        insertKey(key, "PROCESSING", new TransferRequestDto(from, to, amount));
+
+        // act
+        var response = post("/transfers", initialRequest, key);
+
+        // assertions
+        Assertions.assertEquals(409, response.statusCode());
+        Assertions.assertTrue(response.body().contains("IDEMPOTENCY_KEY_IN_PROGRESS"));
+    }
+
     @RepeatedTest(5)
     void concurrentTransferShouldDebitOnce() throws InterruptedException {
         // arrange
@@ -457,6 +476,13 @@ public class TransferControllerTest {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             return response;
         }
+    }
+
+    private void insertKey(String key, String processing, TransferRequestDto initialRequest) {
+        String hash = HashHelper.hash(initialRequest);
+        dsl.insertInto(IDEMPOTENCY_KEYS, KEY, REQUEST_HASH, OUTCOME)
+                .values(key, hash, processing)
+                .execute();
     }
 
     @AfterAll

@@ -28,7 +28,7 @@ public class TransferController {
         switch (transferResponse) {
             case TransferOutcome.Completed completed
                     -> ctx.status(201).json(new TransferResponseDto(completed.id().value()));
-            case TransferOutcome.Processing processing -> ctx.status(409).json(processing);
+            case TransferOutcome.Processing processing -> ctx.status(409).json(payloadOf(APIError.IDEMPOTENCY_KEY_IN_PROGRESS));
             case TransferOutcome.KeyReused keyReused -> ctx.status(422).json(keyReused);
             case TransferOutcome.Rejected rejected -> {
                 switch (rejected.rejection()) {
