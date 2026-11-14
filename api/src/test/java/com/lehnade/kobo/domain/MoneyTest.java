@@ -10,7 +10,7 @@ class MoneyTest {
     @Test
     void moneyWithNegativeAmountShouldThrowException() {
         // arrange & act
-        IllegalArgumentException exception = Assertions.assertThrows(IllegalArgumentException.class,
+        DomainException exception = Assertions.assertThrows(DomainException.class,
                 () -> new Money(-20, SupportedCurrency.EUR));
 
         // assert
@@ -21,7 +21,7 @@ class MoneyTest {
     @Test
     void moneyWith0AmountShouldThrowException() {
         // arrange & act
-        IllegalArgumentException exception = Assertions.assertThrows(IllegalArgumentException.class,
+        DomainException exception = Assertions.assertThrows(DomainException.class,
                 () -> new Money(0, SupportedCurrency.EUR));
 
         // assert
@@ -31,7 +31,7 @@ class MoneyTest {
 
     @Test
     void moneyWithNullCurrencyShouldThrowException() {
-        IllegalArgumentException exception = Assertions.assertThrows(IllegalArgumentException.class,
+        DomainException exception = Assertions.assertThrows(DomainException.class,
                 () -> new Money(10, null));
 
         // assert

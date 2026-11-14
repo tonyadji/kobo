@@ -8,7 +8,7 @@ class AccountIdTest {
     @Test
     void accountIdWithNegativeShouldThrowException() {
         // arrange act
-        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> new AccountId(-1));
+        DomainException exception = assertThrows(DomainException.class, () -> new AccountId(-1));
 
         // assert
         assertEquals("Invalid id", exception.getMessage());
@@ -17,7 +17,7 @@ class AccountIdTest {
     @Test
     void accountIdWith0ShouldThrowException() {
         // arrange act
-        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> new AccountId(0));
+        DomainException exception = assertThrows(DomainException.class, () -> new AccountId(0));
 
         // assert
         assertEquals("Invalid id", exception.getMessage());

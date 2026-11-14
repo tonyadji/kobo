@@ -13,7 +13,7 @@ class TransferTest {
     @Test
     void transferWithNullAmountShouldThrowException() {
         // arrange act
-        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+        DomainException exception = assertThrows(DomainException.class,
                 () -> Transfer.between(FROM, TO, null));
 
         // assert
@@ -24,7 +24,7 @@ class TransferTest {
     @Test
     void transferWithNullFromAccountShouldThrowException() {
         // arrange act
-        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+        DomainException exception = assertThrows(DomainException.class,
                 () -> Transfer.between(null, TO, null));
 
         // assert
@@ -35,7 +35,7 @@ class TransferTest {
     @Test
     void transferWithNullToAccountShouldThrowException() {
         // arrange act
-        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+        DomainException exception = assertThrows(DomainException.class,
                 () -> Transfer.between(FROM, null, null));
 
         // assert
@@ -46,7 +46,7 @@ class TransferTest {
     @Test
     void selfTransferShouldThrowException() {
         // arrange act
-        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+        DomainException exception = assertThrows(DomainException.class,
                 () -> Transfer.between(new AccountId(1), new AccountId(1), AMOUNT));
 
         // assert
