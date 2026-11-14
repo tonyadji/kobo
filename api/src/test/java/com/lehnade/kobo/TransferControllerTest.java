@@ -281,6 +281,7 @@ public class TransferControllerTest {
         Assertions.assertEquals(retryKey.outcome(), firstCallKey.outcome());
         Assertions.assertEquals(retryKey.accountId(), firstCallKey.accountId());
         Assertions.assertEquals(retryResponse.body(), response.body());
+        Assertions.assertEquals("{\"error\":\"UNKNOWN_ACCOUNT\"}", response.body());
     }
 
     @Test
@@ -305,6 +306,7 @@ public class TransferControllerTest {
         Assertions.assertEquals(201, response.statusCode());
         Assertions.assertEquals(422, retryResponse.statusCode());
         Assertions.assertEquals(600, balanceAfter);
+        Assertions.assertEquals("{\"error\":\"IDEMPOTENCY_KEY_ERROR\"}", retryResponse.body());
     }
 
     @Test
