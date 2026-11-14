@@ -52,16 +52,19 @@ public class TransferService {
                         debit(from, amount, innerTx);
                     }
                     long transferIdentifier = transfer(from, to, amount, innerTx);
-                    updateIdempotencyKey(key.key(), transferIdentifier, "COMPLETED", null, innerTx);
+                    var outcome = new TransferOutcome.Completed(new TransferId(transferIdentifier));
+                    updateIdempotencyKey(key.key(), transferIdentifier, ofOutcome(outcome), null, innerTx);
 
-                    return new TransferOutcome.Completed(new TransferId(transferIdentifier));
+                    return outcome;
                 });
             } catch (UnknownAccountException e) {
-                updateIdempotencyKey(key.key(), null, "UNKNOWN_ACCOUNT", e.getAccountId(), outerTx);
-                return new TransferOutcome.Rejected(new TransferRejection.UnknownAccount(new AccountId(e.getAccountId())));
+                var outcome = new TransferOutcome.Rejected(new TransferRejection.UnknownAccount(new AccountId(e.getAccountId())));
+                updateIdempotencyKey(key.key(), null, ofOutcome(outcome), e.getAccountId(), outerTx);
+                return outcome;
             } catch (InsufficientFundException e) {
-                updateIdempotencyKey(key.key(), null, "INSUFFICIENT_FUNDS", null, outerTx);
-                return new TransferOutcome.Rejected(new TransferRejection.InsufficientFunds());
+                var outcome = new TransferOutcome.Rejected(new TransferRejection.InsufficientFunds());
+                updateIdempotencyKey(key.key(), null, ofOutcome(outcome), null, outerTx);
+                return outcome;
             }
         });
         return transactionResponse;
@@ -137,6 +140,18 @@ public class TransferService {
             case "INSUFFICIENT_FUNDS" -> new TransferOutcome.Rejected(new TransferRejection.InsufficientFunds());
             case "UNKNOWN_ACCOUNT" -> new TransferOutcome.Rejected(new TransferRejection.UnknownAccount(new AccountId(existingKey.accountId())));
             default -> throw new IllegalStateException("Unexpected value: " + existingKey.outcome());
+        };
+    }
+
+    private String ofOutcome(TransferOutcome outcome) {
+        return switch (outcome) {
+            case TransferOutcome.Completed completed -> "COMPLETED";
+            case TransferOutcome.Rejected rejected -> switch (rejected.rejection()) {
+                case TransferRejection.InsufficientFunds insufficientFunds -> "INSUFFICIENT_FUNDS";
+                case TransferRejection.UnknownAccount unknownAccount -> "UNKNOWN_ACCOUNT";
+            };
+            case TransferOutcome.Processing processing -> "PROCESSING";
+            case TransferOutcome.KeyReused keyReused -> "KEY_REUSED";
         };
     }
 

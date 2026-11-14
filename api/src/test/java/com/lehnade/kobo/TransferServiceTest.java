@@ -2,6 +2,7 @@ package com.lehnade.kobo;
 
 import com.lehnade.kobo.application.TransferOutcome;
 import com.lehnade.kobo.domain.DomainException;
+import com.lehnade.kobo.domain.TransferRejection;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.SQLDialect;
@@ -80,7 +81,9 @@ public class TransferServiceTest {
         long balanceToAfter = getBalance(to);
         long totalBalanceAfter = balanceFromAfter + balanceToAfter;
 
-        Assertions.assertEquals("INSUFFICIENT_FUNDS", outcome.outcome());
+        Assertions.assertTrue(outcome instanceof TransferOutcome.Rejected);
+        TransferOutcome.Rejected rejected = (TransferOutcome.Rejected) outcome;
+        Assertions.assertTrue(rejected.rejection() instanceof TransferRejection.InsufficientFunds);
         Assertions.assertEquals(totalBalanceBefore, totalBalanceAfter);
         Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
         Assertions.assertEquals(balanceToBefore, balanceToAfter);
@@ -156,7 +159,9 @@ public class TransferServiceTest {
         // assert
         long balanceFromAfter = getBalance(from);
 
-        Assertions.assertEquals("UNKNOWN_ACCOUNT", outcome.outcome());
+        Assertions.assertTrue(outcome instanceof TransferOutcome.Rejected);
+        TransferOutcome.Rejected rejected = (TransferOutcome.Rejected) outcome;
+        Assertions.assertTrue(rejected.rejection() instanceof TransferRejection.UnknownAccount);
         Assertions.assertEquals(balanceFromBefore, balanceFromAfter);
     }
 
@@ -172,7 +177,9 @@ public class TransferServiceTest {
         TransferOutcome outcome = transferService.transfer(from, to, amount, key);
 
         // assert
-        Assertions.assertEquals("UNKNOWN_ACCOUNT", outcome.outcome());
+        Assertions.assertTrue(outcome instanceof TransferOutcome.Rejected);
+        TransferOutcome.Rejected rejected = (TransferOutcome.Rejected) outcome;
+        Assertions.assertTrue(rejected.rejection() instanceof TransferRejection.UnknownAccount);
     }
 
     private void insertAccountsWithBalance(long from, long balance) {
