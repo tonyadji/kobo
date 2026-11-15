@@ -3,6 +3,7 @@ package com.lehnade.kobo;
 import com.lehnade.kobo.application.IdempotentTransfer;
 import com.lehnade.kobo.application.TransferMoney;
 import com.lehnade.kobo.domain.AccountId;
+import com.lehnade.kobo.domain.DomainException;
 import com.lehnade.kobo.domain.Money;
 import com.lehnade.kobo.domain.Transfer;
 import com.lehnade.kobo.infrastructure.JooqTransactions;
@@ -46,7 +47,7 @@ public class TransferPropertiesTest {
             try {
                 var response = transferService.execute(transfer.toDomainTransfer(), keyOf(transfer));
 
-            } catch (KoboException e) {
+            } catch (KoboException | DomainException e) {
                 Statistics.collect(e.getClass().getSimpleName());
             }
 

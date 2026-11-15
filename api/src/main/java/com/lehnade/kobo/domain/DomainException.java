@@ -1,8 +1,6 @@
 package com.lehnade.kobo.domain;
 
-import com.lehnade.kobo.KoboException;
-
-public class DomainException extends KoboException {
+public class DomainException extends RuntimeException {
     public DomainException(String message) {
         super(message);
     }
