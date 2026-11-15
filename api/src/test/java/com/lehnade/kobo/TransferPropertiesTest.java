@@ -1,5 +1,11 @@
 package com.lehnade.kobo;
 
+import com.lehnade.kobo.application.IdempotentTransfer;
+import com.lehnade.kobo.application.TransferMoney;
+import com.lehnade.kobo.domain.AccountId;
+import com.lehnade.kobo.domain.Money;
+import com.lehnade.kobo.domain.Transfer;
+import com.lehnade.kobo.infrastructure.JooqTransactions;
 import net.jqwik.api.*;
 import net.jqwik.api.lifecycle.BeforeContainer;
 import net.jqwik.api.statistics.Statistics;
@@ -13,7 +19,7 @@ import org.junit.jupiter.api.Assertions;
 import java.util.ArrayList;
 import java.util.List;
 
-public class TransferProperties {
+public class TransferPropertiesTest {
 
     private static final Table<?> ACCOUNTS = DSL.table("accounts");
     private static final Field<Long> ID = DSL.field("id", Long.class);
@@ -28,17 +34,17 @@ public class TransferProperties {
 
     @Property(tries = 100)
     void sumOfAllBalanceIsConstantAfterTransferAndNoBalanceIsNegative(
-            @ForAll("transfers") List<Transfer> transfers,
+            @ForAll("transfers") List<GeneratedTransfer> transfers,
             @ForAll("accounts") List<Account> accounts
     ) {
         init(accounts);
 
         long sumBefore = sumBalances();
 
-        TransferService transferService = new TransferService(ctx);
-        for (Transfer transfer : transfers) {
+        IdempotentTransfer transferService = new IdempotentTransfer(new TransferMoney(), new JooqTransactions(ctx));
+        for (GeneratedTransfer transfer : transfers) {
             try {
-                var response = transferService.transfer(transfer.from(), transfer.to(), transfer.amount(), keyOf(transfer));
+                var response = transferService.execute(transfer.toDomainTransfer(), keyOf(transfer));
 
             } catch (KoboException e) {
                 Statistics.collect(e.getClass().getSimpleName());
@@ -54,20 +60,20 @@ public class TransferProperties {
         Assertions.assertEquals(sumBefore, sumAfter);
     }
 
-    private IdempotencyKey keyOf(Transfer transfer) {
+    private IdempotencyKey keyOf(GeneratedTransfer transfer) {
         return IdempotencyKey.of(transfer.key(), HashHelper.hash(transfer));
     }
 
     @Provide
-    Arbitrary<List<Transfer>> transfers() {
+    Arbitrary<List<GeneratedTransfer>> transfers() {
         Arbitrary<Long> account = Arbitraries.longs().between(0, 5)
                 .withDistribution(RandomDistribution.uniform());
         Arbitrary<Long> amount = Arbitraries.frequencyOf(
                 Tuple.of(9, Arbitraries.longs().between(1, 3_000).withDistribution(RandomDistribution.uniform())),
                 Tuple.of(1, Arbitraries.longs().between(-1_000, 0)));
 
-        Arbitrary<Transfer> transfer = Combinators.combine(account, account, amount,
-                Arbitraries.strings().alpha().ofLength(8)).as(Transfer::new);
+        Arbitrary<GeneratedTransfer> transfer = Combinators.combine(account, account, amount,
+                Arbitraries.strings().alpha().ofLength(8)).as(GeneratedTransfer::new);
 
         return transfer.list().ofMinSize(1).ofMaxSize(20)
                 .withSizeDistribution(RandomDistribution.uniform());
@@ -102,5 +108,9 @@ public class TransferProperties {
                 .fetchOne(0, Long.class);
     }
     record Account(long id, long balance) {}
-    record Transfer(long from, long to, long amount, String key) {}
+    record GeneratedTransfer(long from, long to, long amount, String key) {
+        public Transfer toDomainTransfer() {
+            return Transfer.between(new AccountId(from), new AccountId(to), Money.of(amount));
+        }
+    }
 }

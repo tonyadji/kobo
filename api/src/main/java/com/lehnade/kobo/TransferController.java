@@ -2,7 +2,11 @@ package com.lehnade.kobo;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lehnade.kobo.application.IdempotentTransfer;
 import com.lehnade.kobo.application.TransferOutcome;
+import com.lehnade.kobo.domain.AccountId;
+import com.lehnade.kobo.domain.Money;
+import com.lehnade.kobo.domain.Transfer;
 import com.lehnade.kobo.domain.TransferRejection;
 import io.javalin.http.Context;
 
@@ -11,19 +15,20 @@ import java.util.Optional;
 
 public class TransferController {
 
-    private final TransferService transferService;
+    private final IdempotentTransfer idempotentTransfer;
 
-    public TransferController(TransferService transferService) {
-        this.transferService = transferService;
+    public TransferController(IdempotentTransfer idempotentTransfer) {
+        this.idempotentTransfer = idempotentTransfer;
     }
 
     public void transfer(Context ctx) throws JsonProcessingException {
         var key = requireIdempotencyKey(ctx);
         var requestDto =  ctx.bodyValidator(TransferRequestDto.class).get();
-        var transferResponse = transferService.transfer(
-                requestDto.from(),
-                requestDto.to(),
-                requestDto.amount(),
+        var transferResponse = idempotentTransfer.execute(Transfer.between(
+                new AccountId(requestDto.from()),
+                new AccountId(requestDto.to()),
+                Money.of(requestDto.amount())
+                ),
                 IdempotencyKey.of(key, HashHelper.hash(requestDto)));
         switch (transferResponse) {
             case TransferOutcome.Completed completed

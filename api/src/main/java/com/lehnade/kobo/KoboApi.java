@@ -2,7 +2,11 @@ package com.lehnade.kobo;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lehnade.kobo.application.IdempotentTransfer;
+import com.lehnade.kobo.application.Transactions;
+import com.lehnade.kobo.application.TransferMoney;
 import com.lehnade.kobo.domain.DomainException;
+import com.lehnade.kobo.infrastructure.JooqTransactions;
 import io.javalin.Javalin;
 import io.javalin.json.JavalinJackson;
 import org.jooq.DSLContext;
@@ -18,7 +22,10 @@ public class KoboApi {
 
     public static Javalin create(DSLContext dsl) {
 
-        TransferController transferController = new TransferController(new TransferService(dsl));
+        Transactions transactions = new JooqTransactions(dsl);
+        TransferMoney transferMoney = new TransferMoney();
+        IdempotentTransfer idempotentTransfer = new IdempotentTransfer(transferMoney, transactions);
+        TransferController transferController = new TransferController(idempotentTransfer);
         AccountController accountController = new AccountController(new AccountService(dsl));
 
         ObjectMapper mapper = new ObjectMapper();

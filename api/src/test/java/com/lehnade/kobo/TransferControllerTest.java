@@ -353,7 +353,7 @@ public class TransferControllerTest {
         Assertions.assertTrue(response.body().contains("IDEMPOTENCY_KEY_IN_PROGRESS"));
     }
 
-    @RepeatedTest(5)
+    @RepeatedTest(20)
     void concurrentTransferShouldDebitOnce() throws InterruptedException {
         // arrange
         long from = 2L;

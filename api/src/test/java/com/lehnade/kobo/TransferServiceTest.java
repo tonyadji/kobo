@@ -1,8 +1,10 @@
 package com.lehnade.kobo;
 
+import com.lehnade.kobo.application.IdempotentTransfer;
+import com.lehnade.kobo.application.TransferMoney;
 import com.lehnade.kobo.application.TransferOutcome;
-import com.lehnade.kobo.domain.DomainException;
-import com.lehnade.kobo.domain.TransferRejection;
+import com.lehnade.kobo.domain.*;
+import com.lehnade.kobo.infrastructure.JooqTransactions;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.SQLDialect;
@@ -45,8 +47,9 @@ public class TransferServiceTest {
         long totalBalanceBefore = balanceFromBefore + balanceToBefore;
         IdempotencyKey key = keyOf(from, to, amount);
         // act
-        TransferService transferService = new TransferService(dsl);
-        transferService.transfer(from, to, amount, key);
+        IdempotentTransfer transferService = new IdempotentTransfer(new TransferMoney(), new JooqTransactions(dsl));
+        Transfer transfer = Transfer.between(new AccountId(from), new AccountId(to), Money.of(amount));
+        transferService.execute(transfer, key);
 
         // assert
         long balanceFromAfter = getBalance(from);
@@ -70,11 +73,12 @@ public class TransferServiceTest {
         long balanceFromBefore = getBalance(from);
         long balanceToBefore = getBalance(to);
         long totalBalanceBefore = balanceFromBefore + balanceToBefore;
+        Transfer transfer = Transfer.between(new AccountId(from), new AccountId(to), Money.of(amount));
         IdempotencyKey key = keyOf(from, to, amount);
 
         // act
-        TransferService transferService = new TransferService(dsl);
-        TransferOutcome outcome = transferService.transfer(from, to, amount, key);
+        IdempotentTransfer transferService = new IdempotentTransfer(new TransferMoney(), new JooqTransactions(dsl));
+        TransferOutcome outcome = transferService.execute(transfer, key);
 
         // assert
         long balanceFromAfter = getBalance(from);
@@ -102,9 +106,8 @@ public class TransferServiceTest {
         long totalBalanceBefore = balanceFromBefore + balanceToBefore;
         IdempotencyKey key = keyOf(from, to, amount);
         // act
-        TransferService transferService = new TransferService(dsl);
         DomainException exception = Assertions.assertThrows(DomainException.class,
-                () -> transferService.transfer(from, to, amount, key));
+                () -> Money.of(amount));
 
         // assert
         long balanceFromAfter = getBalance(from);
@@ -121,17 +124,16 @@ public class TransferServiceTest {
     void selfTransferIsRefused() {
         // arrange
         long from = 2L;
-        long to = 3L;
+        long to = 2L;
         long amount = 20;
         insertAccountsWithBalance(from, 200L);
-        insertAccountsWithBalance(to, 150L);
         long balanceFromBefore = getBalance(from);
         long totalBalanceBefore = balanceFromBefore;
         IdempotencyKey key = keyOf(from, to, amount);
+
         // act
-        TransferService transferService = new TransferService(dsl);
         DomainException exception = Assertions.assertThrows(DomainException.class,
-                () -> transferService.transfer(from, from, amount, key));
+                () -> Transfer.between(new AccountId(from), new AccountId(to), Money.of(amount)));
 
         // assert
         long balanceFromAfter = getBalance(from);
@@ -152,9 +154,10 @@ public class TransferServiceTest {
 
         long balanceFromBefore = getBalance(from);
         IdempotencyKey key = keyOf(from, to, amount);
+        Transfer transfer = Transfer.between(new AccountId(from), new AccountId(to), Money.of(amount));
         // act
-        TransferService transferService = new TransferService(dsl);
-        TransferOutcome outcome = transferService.transfer(from, to, amount, key);
+        IdempotentTransfer transferService = new IdempotentTransfer(new TransferMoney(), new JooqTransactions(dsl));
+        TransferOutcome outcome = transferService.execute(transfer, key);
 
         // assert
         long balanceFromAfter = getBalance(from);
@@ -172,9 +175,10 @@ public class TransferServiceTest {
         long to = 3L;
         long amount = 10;
         IdempotencyKey key = keyOf(from, to, amount);
+        Transfer transfer = Transfer.between(new AccountId(from), new AccountId(to), Money.of(amount));
         // act
-        TransferService transferService = new TransferService(dsl);
-        TransferOutcome outcome = transferService.transfer(from, to, amount, key);
+        IdempotentTransfer transferService = new IdempotentTransfer(new TransferMoney(), new JooqTransactions(dsl));
+        TransferOutcome outcome = transferService.execute(transfer, key);
 
         // assert
         Assertions.assertTrue(outcome instanceof TransferOutcome.Rejected);
